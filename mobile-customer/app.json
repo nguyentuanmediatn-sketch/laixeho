@@ -1,0 +1,19 @@
+{
+  "expo": {
+    "name": "Lái Xe Hộ - Khách Hàng",
+    "slug": "lai-xe-ho-khach-hang",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "platforms": ["ios", "android"],
+    "ios": {
+      "bundleIdentifier": "vn.laixeho.customer",
+      "infoPlist": {
+        "NSLocationWhenInUseUsageDescription": "Ứng dụng cần vị trí của bạn để tự động định vị điểm đón tài xế lái xe hộ."
+      }
+    },
+    "android": {
+      "package": "vn.laixeho.customer",
+      "permissions": ["ACCESS_FINE_LOCATION", "ACCESS_COARSE_LOCATION"]
+    }
+  }
+}

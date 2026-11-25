@@ -1,0 +1,15 @@
+{
+  "name": "laixeho-monorepo",
+  "private": true,
+  "workspaces": [
+    "backend",
+    "web-admin",
+    "mobile-customer",
+    "mobile-driver"
+  ],
+  "scripts": {
+    "build:backend": "npm --workspace=backend run build",
+    "test:backend": "npm --workspace=backend test",
+    "build:admin": "npm --workspace=web-admin run build"
+  }
+}

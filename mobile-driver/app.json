@@ -1,0 +1,27 @@
+{
+  "expo": {
+    "name": "Lái Xe Hộ - Tài Xế",
+    "slug": "lai-xe-ho-tai-xe",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "platforms": ["ios", "android"],
+    "ios": {
+      "bundleIdentifier": "vn.laixeho.driver",
+      "infoPlist": {
+        "NSLocationWhenInUseUsageDescription": "Ứng dụng cần vị trí để nhận đơn lái xe hộ gần bạn.",
+        "NSLocationAlwaysAndWhenInUseUsageDescription": "Ứng dụng cần vị trí nền để điều phối đơn và hiển thị lộ trình cho khách.",
+        "NSCameraUsageDescription": "Ứng dụng cần camera để chụp ảnh và quay video tình trạng xe khi nhận và trả xe.",
+        "NSMicrophoneUsageDescription": "Ứng dụng cần micro khi quay video kiểm tra tình trạng xe."
+      }
+    },
+    "android": {
+      "package": "vn.laixeho.driver",
+      "permissions": [
+        "ACCESS_FINE_LOCATION",
+        "ACCESS_COARSE_LOCATION",
+        "CAMERA",
+        "RECORD_AUDIO"
+      ]
+    }
+  }
+}
