@@ -2,7 +2,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 
 const TOKEN_KEY = 'lxh_driver_token';
 const API_KEY = 'lxh_driver_api_base';
-const DEFAULT_API = process.env.EXPO_PUBLIC_API_URL || 'http://127.0.0.1:3005';
+const DEFAULT_API = process.env.EXPO_PUBLIC_API_URL || 'https://api.tuannv.site';
 
 let authToken: string | null = null;
 let apiBase: string = DEFAULT_API;
