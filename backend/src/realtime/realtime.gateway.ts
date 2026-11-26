@@ -99,4 +99,8 @@ export class RealtimeGateway implements OnGatewayConnection, OnGatewayDisconnect
   emitToAdmin(event: string, payload: any) {
     this.server?.to('admins').emit(`admin:${event}`, payload);
   }
+
+  emitToAll(event: string, payload: any) {
+    this.server?.emit(event, payload);
+  }
 }

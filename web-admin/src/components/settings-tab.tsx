@@ -45,6 +45,19 @@ const SETTING_GROUPS: Array<{
       { key: 'bank_info', label: 'Mô tả tài khoản hiển thị trên App' },
     ],
   },
+  {
+    title: 'Cập nhật tự động & Ép phiên bản App Android (OTA APK)',
+    fields: [
+      { key: 'driver_latest_version', label: 'Phiên bản mới nhất App Tài xế (vd: 1.2.0)' },
+      { key: 'driver_min_version', label: 'Phiên bản BẮT BUỘC tối thiểu App Tài xế (ép cập nhật)' },
+      { key: 'driver_apk_url', label: 'Link tải APK App Tài xế' },
+      { key: 'driver_release_notes', label: 'Nội dung bản cập nhật App Tài xế' },
+      { key: 'customer_latest_version', label: 'Phiên bản mới nhất App Khách hàng (vd: 1.2.0)' },
+      { key: 'customer_min_version', label: 'Phiên bản BẮT BUỘC tối thiểu App Khách (ép cập nhật)' },
+      { key: 'customer_apk_url', label: 'Link tải APK App Khách hàng' },
+      { key: 'customer_release_notes', label: 'Nội dung bản cập nhật App Khách hàng' },
+    ],
+  },
 ];
 
 export function SettingsTab({

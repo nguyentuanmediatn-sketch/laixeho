@@ -19,6 +19,7 @@ import { NotificationsService } from '../notifications/notifications.service';
 import { MaintenanceService } from '../maintenance/maintenance.service';
 import { PricingService } from '../pricing/pricing.service';
 import { RedisService } from '../redis/redis.service';
+import { RealtimeGateway } from '../realtime/realtime.gateway';
 
 class ManualTripDto {
   @IsString() @IsNotEmpty() customerPhone: string;
@@ -85,6 +86,7 @@ export class AdminController {
     private readonly maintenanceService: MaintenanceService,
     private readonly pricingService: PricingService,
     private readonly redis: RedisService,
+    private readonly realtime: RealtimeGateway,
   ) {}
 
   private buildDateRange(from?: string, to?: string) {
@@ -240,6 +242,17 @@ export class AdminController {
         },
       });
     });
+
+    if (
+      body.driver_latest_version ||
+      body.driver_min_version ||
+      body.customer_latest_version ||
+      body.customer_min_version
+    ) {
+      this.realtime.emitToAll('app:update_available', {
+        updatedAt: new Date().toISOString(),
+      });
+    }
 
     return this.prisma.setting.findMany({ orderBy: { key: 'asc' } });
   }

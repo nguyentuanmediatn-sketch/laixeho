@@ -1,6 +1,6 @@
 {
   "name": "@laixeho/mobile-driver",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "main": "index.ts",
   "scripts": {
     "start": "expo start",
@@ -13,7 +13,9 @@
     "@react-native-async-storage/async-storage": "1.23.1",
     "expo": "~52.0.0",
     "expo-av": "~15.0.2",
+    "expo-file-system": "~18.0.12",
     "expo-image-picker": "~16.0.0",
+    "expo-intent-launcher": "~12.0.2",
     "expo-linear-gradient": "~14.0.2",
     "expo-location": "~18.0.0",
     "expo-notifications": "~0.29.14",

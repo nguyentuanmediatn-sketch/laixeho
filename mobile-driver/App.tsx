@@ -42,6 +42,7 @@ import {
   startTripRingtone,
   stopTripRingtone,
 } from './src/trip-alert-service';
+import { AppUpdateModal } from './src/components/app-update-modal';
 
 type Tab = 'home' | 'wallet' | 'fee' | 'history' | 'profile';
 
@@ -63,6 +64,7 @@ function DriverAppContent() {
   const [notifications, setNotifications] = useState<any[]>([]);
   const [lockRemainSec, setLockRemainSec] = useState(0);
   const [completedSummary, setCompletedSummary] = useState<any>(null);
+  const [updateCheckSignal, setUpdateCheckSignal] = useState(0);
 
   const alertedOfferIdRef = useRef<string | null>(null);
   const alertedAssignedTripIdRef = useRef<string | null>(null);
@@ -260,6 +262,9 @@ function DriverAppContent() {
           triggerAssignedTripAlert(trip);
         }
       }
+    });
+    socket.on('app:update_available', () => {
+      setUpdateCheckSignal((n) => n + 1);
     });
     socket.on('notification:new', (notif: any) => {
       setNotifications((prev) => [notif, ...prev]);
@@ -537,6 +542,7 @@ function DriverAppContent() {
             if (u?.status === 'PENDING') setTab('profile');
           }}
         />
+        <AppUpdateModal apiBase={serverUrl} refreshSignal={updateCheckSignal} />
       </SafeAreaView>
     );
   }
@@ -969,6 +975,8 @@ function DriverAppContent() {
           </View>
         </View>
       </Modal>
+
+      <AppUpdateModal apiBase={serverUrl} refreshSignal={updateCheckSignal} />
     </SafeAreaView>
   );
 }

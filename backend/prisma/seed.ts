@@ -28,6 +28,14 @@ export const DEFAULT_SETTINGS: Record<string, string> = {
   hotline: '0973521456',
   public_track_base_url: 'https://now.tuannv.site',
   bank_info: 'Ngân hàng: MB Bank | STK: 0973521456 | Chủ TK: NGUYEN VAN TUAN',
+  driver_latest_version: '1.1.0',
+  driver_min_version: '1.1.0',
+  driver_apk_url: 'https://now.tuannv.site/apk/laixeho-driver.apk',
+  driver_release_notes: 'Bổ sung chuông báo đơn mới, thông báo tổng đài gán chuyến và tự động cập nhật trong app.',
+  customer_latest_version: '1.1.0',
+  customer_min_version: '1.1.0',
+  customer_apk_url: 'https://now.tuannv.site/apk/laixeho-customer.apk',
+  customer_release_notes: 'Bổ sung tự động cập nhật trong app, chia sẻ hành trình trực tiếp và nút SOS khẩn cấp.',
 };
 
 async function main() {

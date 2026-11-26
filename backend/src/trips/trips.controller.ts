@@ -135,12 +135,42 @@ export class TripsController {
   @Get('config')
   async getPublicConfig() {
     const rows = await this.prisma.setting.findMany({
-      where: { key: { in: ['public_track_base_url', 'hotline'] } },
+      where: {
+        key: {
+          in: [
+            'public_track_base_url',
+            'hotline',
+            'driver_latest_version',
+            'driver_min_version',
+            'driver_apk_url',
+            'driver_release_notes',
+            'customer_latest_version',
+            'customer_min_version',
+            'customer_apk_url',
+            'customer_release_notes',
+          ],
+        },
+      },
     });
     const map = Object.fromEntries(rows.map((r) => [r.key, r.value]));
+    const base = (map.public_track_base_url || 'https://now.tuannv.site').replace(/\/+$/, '');
     return {
-      publicTrackBaseUrl: (map.public_track_base_url || 'https://now.tuannv.site').replace(/\/+$/, ''),
+      publicTrackBaseUrl: base,
       hotline: map.hotline || '0973521456',
+      appUpdate: {
+        driver: {
+          latestVersion: map.driver_latest_version || '1.1.0',
+          minVersion: map.driver_min_version || '1.1.0',
+          apkUrl: map.driver_apk_url || `${base}/apk/laixeho-driver.apk`,
+          releaseNotes: map.driver_release_notes || '',
+        },
+        customer: {
+          latestVersion: map.customer_latest_version || '1.1.0',
+          minVersion: map.customer_min_version || '1.1.0',
+          apkUrl: map.customer_apk_url || `${base}/apk/laixeho-customer.apk`,
+          releaseNotes: map.customer_release_notes || '',
+        },
+      },
     };
   }
 

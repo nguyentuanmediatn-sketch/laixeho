@@ -24,6 +24,7 @@ import { CustomerLoginScreen } from './src/components/login-screen';
 import { BookingView } from './src/components/booking-view';
 import { ActiveTripView } from './src/components/active-trip-view';
 import { HistoryTab, NotificationsTab, ProfileTab } from './src/components/history-profile-view';
+import { AppUpdateModal } from './src/components/app-update-modal';
 
 type Tab = 'book' | 'history' | 'notifications' | 'profile';
 
@@ -41,6 +42,7 @@ function CustomerAppContent() {
   });
   const [history, setHistory] = useState<any[]>([]);
   const [notifications, setNotifications] = useState<any[]>([]);
+  const [updateCheckSignal, setUpdateCheckSignal] = useState(0);
   const socketRef = useRef<Socket | null>(null);
 
   useEffect(() => {
@@ -113,6 +115,9 @@ function CustomerAppContent() {
           : prev,
       );
     });
+    socket.on('app:update_available', () => {
+      setUpdateCheckSignal((n) => n + 1);
+    });
     socket.on('notification:new', (notif: any) => {
       setNotifications((prev) => [notif, ...prev]);
     });
@@ -157,6 +162,7 @@ function CustomerAppContent() {
             setUser(u);
           }}
         />
+        <AppUpdateModal apiBase={serverUrl} refreshSignal={updateCheckSignal} />
       </SafeAreaView>
     );
   }
@@ -269,6 +275,8 @@ function CustomerAppContent() {
           })}
         </View>
       </View>
+
+      <AppUpdateModal apiBase={serverUrl} refreshSignal={updateCheckSignal} />
     </SafeAreaView>
   );
 }
