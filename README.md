@@ -64,6 +64,31 @@ adb install -r builds/laixeho-driver.apk
 ```
 *(Trong màn hình đăng nhập của cả 2 app có mục **⚙ Cấu hình Server** để đổi URL Backend trực tiếp không cần build lại APK).*
 
+## Làm Việc Trên Máy Tính Khác & Build Production (`now.tuannv.site` / `api.tuannv.site`)
+
+Toàn bộ mã nguồn (kể cả cấu hình Android native, chuông báo `trip_alert.wav`, icon, manifest bảo mật) đều đã đồng bộ trên GitHub. Các tệp khóa nhạy cảm (**Release Keystore** và **Firebase FCM**) được lưu an toàn tại `/home/tuannv/laixeho-secrets/` trên VPS (không đẩy lên GitHub để tránh lộ khóa).
+
+Trên bất kỳ máy tính mới nào (đã cấu hình SSH alias `ubuntu`):
+```powershell
+git clone https://github.com/nguyentuanmediatn-sketch/laixeho.git
+cd laixeho
+npm install
+
+# Kéo toàn bộ 4 file khóa bí mật (Keystore + Firebase) từ VPS vào đúng thư mục
+.\scripts\sync-secrets-from-vps.ps1   # Windows (hoặc ./scripts/sync-secrets-from-vps.sh trên macOS/Linux)
+```
+Build 2 file APK Release chính thức (ký bằng `now-thainguyen-release.keystore` + nhúng sẵn Firebase FCM):
+```powershell
+$env:EXPO_PUBLIC_API_URL = "https://api.tuannv.site"
+$env:NODE_ENV = "production"
+cd mobile-driver\android && .\gradlew.bat assembleRelease "-PreactNativeArchitectures=arm64-v8a,armeabi-v7a,x86_64" --no-daemon
+cd ..\..\mobile-customer\android && .\gradlew.bat assembleRelease "-PreactNativeArchitectures=arm64-v8a,armeabi-v7a,x86_64" --no-daemon
+```
+- **Web Admin Production:** `https://now.tuannv.site`
+- **Backend API & Socket.IO:** `https://api.tuannv.site`
+- **Trang tải APK:** `https://now.tuannv.site/apk/`
+- **Firebase Project:** `now-thai-nguyen` (FCM v1, gói `vn.laixeho.customer` & `vn.laixeho.driver`, Release SHA-1: `86:48:7C:F2:12:22:75:52:E3:68:14:6A:0F:5E:E4:36:77:A7:43:06`)
+
 ## Kiểm Thử Tự Động
 - Backend unit tests: `npm --prefix backend test`
 - Backend typecheck & build: `npm --prefix backend run typecheck && npm --prefix backend run build`

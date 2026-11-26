@@ -27,12 +27,18 @@ Thumbs.db
 # Coverage
 coverage/
 
-# Local uploads & generated native builds
+# Local uploads & generated native build outputs (keep Android source configs tracked for multi-PC work!)
 backend/uploads/
 builds/
-mobile-customer/android/
-mobile-customer/ios/
-mobile-driver/android/
-mobile-driver/ios/
 *.apk
+*.aab
+mobile-customer/ios/
+mobile-driver/ios/
+**/android/.gradle/
+**/android/build/
+**/android/app/build/
+**/android/app/.cxx/
+**/android/local.properties
+**/android/app/google-services.json
+**/android/app/debug.keystore
 
