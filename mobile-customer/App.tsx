@@ -1,289 +1,321 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import {
-  Alert,
-  Linking,
-  SafeAreaView,
+  ActivityIndicator,
+  Image,
   ScrollView,
   StyleSheet,
   Text,
-  TextInput,
   TouchableOpacity,
   View,
 } from 'react-native';
-import * as Location from 'expo-location';
-import { io } from 'socket.io-client';
-import { API_BASE, customerApi, setCustomerToken } from './src/api';
+import { StatusBar } from 'expo-status-bar';
+import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context';
+import { Ionicons } from '@expo/vector-icons';
+import { io, Socket } from 'socket.io-client';
+import {
+  customerApi,
+  getApiBase,
+  getCustomerToken,
+  loadSavedSession,
+  setCustomerToken,
+} from './src/api';
+import { COLORS, SHADOW } from './src/theme';
+import { CustomerLoginScreen } from './src/components/login-screen';
+import { BookingView } from './src/components/booking-view';
+import { ActiveTripView } from './src/components/active-trip-view';
+import { HistoryTab, NotificationsTab, ProfileTab } from './src/components/history-profile-view';
 
-export default function App() {
+type Tab = 'book' | 'history' | 'notifications' | 'profile';
+
+function CustomerAppContent() {
+  const [booting, setBooting] = useState(true);
   const [user, setUser] = useState<any>(null);
-  const [phone, setPhone] = useState('0900000001');
-  const [otp, setOtp] = useState('123456');
-  const [otpSent, setOtpSent] = useState(false);
+  const [serverUrl, setServerUrl] = useState(getApiBase());
 
-  const [tab, setTab] = useState<'book' | 'history'>('book');
-  const [pickupAddress, setPickupAddress] = useState('Vị trí hiện tại của tôi');
-  const [pickupCoord, setPickupCoord] = useState({ lat: 10.7769, lng: 106.7009 });
-  const [dropoffAddress, setDropoffAddress] = useState('');
-  const [dropoffCoord, setDropoffCoord] = useState<{ lat: number; lng: number } | null>(null);
-  const [estimate, setEstimate] = useState<any>(null);
+  const [tab, setTab] = useState<Tab>('book');
   const [activeTrip, setActiveTrip] = useState<any>(null);
+  const [dispatchRingInfo, setDispatchRingInfo] = useState<{ ring: number; radiusKm: number } | null>(null);
+  const [publicConfig, setPublicConfig] = useState<{ publicTrackBaseUrl: string; hotline: string }>({
+    publicTrackBaseUrl: 'https://tuannv.site',
+    hotline: '0973521456',
+  });
   const [history, setHistory] = useState<any[]>([]);
+  const [notifications, setNotifications] = useState<any[]>([]);
+  const socketRef = useRef<Socket | null>(null);
 
   useEffect(() => {
     (async () => {
-      const { status } = await Location.requestForegroundPermissionsAsync();
-      if (status === 'granted') {
-        const loc = await Location.getCurrentPositionAsync({});
-        setPickupCoord({ lat: loc.coords.latitude, lng: loc.coords.longitude });
+      try {
+        const session = await loadSavedSession();
+        setServerUrl(session.apiBase);
+        if (session.token) {
+          const me = await customerApi('/auth/me');
+          if (me) setUser(me);
+        }
+      } catch {
+        await setCustomerToken(null);
+      } finally {
+        setBooting(false);
       }
     })();
   }, []);
 
-  useEffect(() => {
-    if (!user) return;
-    const socket = io(`${API_BASE}/ws`, {
-      query: { userId: user.id, role: 'CUSTOMER' },
-    });
-    socket.on('trip:status', (trip: any) => {
-      setActiveTrip(trip);
-      if (trip.status === 'COMPLETED' || trip.status === 'CANCELLED') {
-        loadHistory();
-      }
-    });
-    socket.on('driver:location', (loc: { lat: number; lng: number }) => {
-      setActiveTrip((prev: any) =>
-        prev ? { ...prev, driver: { ...prev.driver, lat: loc.lat, lng: loc.lng } } : prev,
-      );
-    });
-    loadHistory();
-    return () => {
-      socket.disconnect();
-    };
-  }, [user]);
-
-  const requestOtp = async () => {
+  const loadInitialData = async () => {
     try {
-      await customerApi('/auth/otp/request', {
-        method: 'POST',
-        body: JSON.stringify({ phone, userType: 'CUSTOMER' }),
-      });
-      setOtpSent(true);
-    } catch (e: any) {
-      Alert.alert('Lỗi', e.message);
-    }
-  };
-
-  const verifyOtp = async () => {
-    try {
-      const res = await customerApi('/auth/otp/verify', {
-        method: 'POST',
-        body: JSON.stringify({ phone, otp, userType: 'CUSTOMER' }),
-      });
-      setCustomerToken(res.accessToken);
-      setUser(res.user);
-    } catch (e: any) {
-      Alert.alert('Lỗi', e.message);
-    }
-  };
-
-  const loadHistory = async () => {
-    try {
-      const data = await customerApi('/trips/my-history');
-      setHistory(data);
+      const [active, hist, notifs, pubCfg] = await Promise.all([
+        customerApi('/trips/active'),
+        customerApi('/trips/my-history'),
+        customerApi('/notifications'),
+        customerApi('/trips/config').catch(() => null),
+      ]);
+      if (active) setActiveTrip(active);
+      setHistory(hist || []);
+      setNotifications(notifs || []);
+      if (pubCfg?.publicTrackBaseUrl) setPublicConfig(pubCfg);
     } catch {
       // ignore
     }
   };
 
-  const handleEstimate = async () => {
-    if (!dropoffCoord) {
-      // Demo coordinate offset if user only typed text
-      const dest = { lat: pickupCoord.lat + 0.04, lng: pickupCoord.lng + 0.03 };
-      setDropoffCoord(dest);
-      const res = await customerApi('/trips/estimate', {
-        method: 'POST',
-        body: JSON.stringify({
-          pickupLat: pickupCoord.lat,
-          pickupLng: pickupCoord.lng,
-          dropoffLat: dest.lat,
-          dropoffLng: dest.lng,
-        }),
-      });
-      setEstimate(res);
-      return;
-    }
-    const res = await customerApi('/trips/estimate', {
-      method: 'POST',
-      body: JSON.stringify({
-        pickupLat: pickupCoord.lat,
-        pickupLng: pickupCoord.lng,
-        dropoffLat: dropoffCoord.lat,
-        dropoffLng: dropoffCoord.lng,
-      }),
+  useEffect(() => {
+    if (!user) return;
+    const token = getCustomerToken();
+    if (!token) return;
+
+    const socket = io(`${getApiBase()}/ws`, { auth: { token } });
+    socketRef.current = socket;
+
+    socket.on('trip:status', (trip: any) => {
+      setActiveTrip((prev: any) => (trip?.id ? trip : prev));
+      if (trip?.status && trip.status !== 'SEARCHING') {
+        setDispatchRingInfo(null);
+      }
+      if (['COMPLETED', 'CANCELLED', 'NO_DRIVER'].includes(trip?.status)) {
+        customerApi('/trips/my-history').then(setHistory).catch(() => undefined);
+      }
     });
-    setEstimate(res);
+    socket.on('trip:dispatch_ring', (info: { tripId?: string; ring: number; radiusKm: number }) => {
+      if (info?.ring && info?.radiusKm) {
+        setDispatchRingInfo({ ring: info.ring, radiusKm: info.radiusKm });
+      }
+    });
+    socket.on('trip:dropoff_updated', (trip: any) => {
+      if (trip?.id) setActiveTrip(trip);
+    });
+    socket.on('driver:location', (loc: { lat: number; lng: number; actualRoutePolyline?: string }) => {
+      setActiveTrip((prev: any) =>
+        prev
+          ? {
+              ...prev,
+              driver: { ...(prev.driver || {}), lat: loc.lat, lng: loc.lng },
+              ...(loc.actualRoutePolyline ? { actualRoutePolyline: loc.actualRoutePolyline } : {}),
+            }
+          : prev,
+      );
+    });
+    socket.on('notification:new', (notif: any) => {
+      setNotifications((prev) => [notif, ...prev]);
+    });
+
+    loadInitialData();
+    return () => {
+      socket.disconnect();
+      socketRef.current = null;
+    };
+  }, [user?.id]);
+
+  useEffect(() => {
+    if (activeTrip?.id && socketRef.current) {
+      socketRef.current.emit('trip:join', { tripId: activeTrip.id });
+    }
+  }, [activeTrip?.id]);
+
+  const handleLogout = async () => {
+    await setCustomerToken(null);
+    setUser(null);
+    setActiveTrip(null);
   };
 
-  const handleBookOneTap = async () => {
-    try {
-      const trip = await customerApi('/trips', {
-        method: 'POST',
-        body: JSON.stringify({
-          pickupAddress,
-          pickupLat: pickupCoord.lat,
-          pickupLng: pickupCoord.lng,
-          dropoffAddress: dropoffAddress || undefined,
-          dropoffLat: dropoffCoord?.lat,
-          dropoffLng: dropoffCoord?.lng,
-        }),
-      });
-      setActiveTrip(trip);
-    } catch (e: any) {
-      Alert.alert('Lỗi đặt xe', e.message);
-    }
-  };
+  const unreadCount = notifications.filter((n) => !n.readAt).length;
 
-  const handleCancelTrip = async () => {
-    if (!activeTrip) return;
-    try {
-      const updated = await customerApi(`/trips/${activeTrip.id}/cancel`, {
-        method: 'POST',
-        body: JSON.stringify({ reason: 'Khách hàng hủy trên ứng dụng' }),
-      });
-      setActiveTrip(updated);
-    } catch (e: any) {
-      Alert.alert('Không thể hủy', e.message);
-    }
-  };
+  if (booting) {
+    return (
+      <SafeAreaView style={styles.center}>
+        <ActivityIndicator size="large" color={COLORS.primary} />
+      </SafeAreaView>
+    );
+  }
 
   if (!user) {
     return (
-      <SafeAreaView style={styles.container}>
-        <View style={styles.card}>
-          <Text style={styles.title}>Lái Xe Hộ – Khách Hàng</Text>
-          <Text style={styles.subtitle}>Đăng nhập bằng số điện thoại</Text>
-          <TextInput style={styles.input} value={phone} onChangeText={setPhone} keyboardType="phone-pad" placeholder="Số điện thoại" />
-          {otpSent && (
-            <TextInput style={styles.input} value={otp} onChangeText={setOtp} keyboardType="number-pad" placeholder="Mã OTP (6 số)" />
-          )}
-          <TouchableOpacity style={styles.primaryBtn} onPress={otpSent ? verifyOtp : requestOtp}>
-            <Text style={styles.btnText}>{otpSent ? 'Xác nhận OTP' : 'Gửi mã OTP'}</Text>
-          </TouchableOpacity>
-        </View>
+      <SafeAreaView style={{ flex: 1, backgroundColor: COLORS.darkBg }} edges={['bottom']}>
+        <StatusBar style="light" />
+        <CustomerLoginScreen
+          initialServerUrl={serverUrl}
+          onLoggedIn={async (token, u) => {
+            await setCustomerToken(token);
+            setUser(u);
+          }}
+        />
       </SafeAreaView>
     );
   }
 
   return (
-    <SafeAreaView style={styles.container}>
-      <View style={styles.header}>
-        <Text style={styles.headerTitle}>Xin chào, {user.name || user.phone}</Text>
-        <View style={styles.tabs}>
-          <TouchableOpacity onPress={() => setTab('book')} style={[styles.tabBtn, tab === 'book' && styles.tabActive]}>
-            <Text style={styles.tabText}>Đặt lái hộ</Text>
-          </TouchableOpacity>
-          <TouchableOpacity onPress={() => { setTab('history'); loadHistory(); }} style={[styles.tabBtn, tab === 'history' && styles.tabActive]}>
-            <Text style={styles.tabText}>Lịch sử</Text>
-          </TouchableOpacity>
+    <SafeAreaView style={styles.container} edges={['top', 'bottom']}>
+      <StatusBar style="dark" />
+
+      {/* NOW Thái Nguyên Top Header */}
+      <View style={styles.topHeader}>
+        <View style={styles.greetRow}>
+          <Image source={require('./assets/icon.png')} style={styles.brandMiniLogo} />
+          <View>
+            <Text style={styles.helloSub}>NOW Thái Nguyên · Lái Xe Hộ</Text>
+            <Text style={styles.helloName}>Xin chào, {user.name || user.phone}</Text>
+          </View>
         </View>
+        <TouchableOpacity
+          style={styles.bellBtn}
+          onPress={() => {
+            setTab('notifications');
+            customerApi('/notifications').then(setNotifications).catch(() => undefined);
+          }}
+        >
+          <Ionicons name="notifications-outline" size={21} color={COLORS.text} />
+          {unreadCount > 0 && (
+            <View style={styles.bellBadge}>
+              <Text style={styles.bellBadgeTxt}>{unreadCount > 9 ? '9+' : unreadCount}</Text>
+            </View>
+          )}
+        </TouchableOpacity>
       </View>
 
-      <ScrollView contentContainerStyle={styles.scroll}>
-        {tab === 'book' ? (
-          activeTrip && !['COMPLETED', 'CANCELLED'].includes(activeTrip.status) ? (
-            <View style={styles.card}>
-              <Text style={styles.title}>Chuyến {activeTrip.code}</Text>
-              <Text style={styles.badge}>Trạng thái: {activeTrip.status}</Text>
-              <Text style={styles.info}>Điểm đón: {activeTrip.pickupAddress}</Text>
-              {activeTrip.dropoffAddress && <Text style={styles.info}>Điểm đến: {activeTrip.dropoffAddress}</Text>}
-              {activeTrip.estimatedPrice && (
-                <Text style={styles.price}>Giá dự kiến: {activeTrip.estimatedPrice.toLocaleString('vi-VN')}đ</Text>
-              )}
-              {activeTrip.driver && (
-                <View style={styles.driverBox}>
-                  <Text style={styles.info}>Tài xế: {activeTrip.driver.name || activeTrip.driver.phone}</Text>
-                  <TouchableOpacity
-                    style={styles.callBtn}
-                    onPress={() => Linking.openURL(`tel:${activeTrip.driver.phone}`)}
-                  >
-                    <Text style={styles.btnText}>Gọi tài xế ({activeTrip.driver.phone})</Text>
-                  </TouchableOpacity>
-                </View>
-              )}
-              {activeTrip.status !== 'IN_PROGRESS' && (
-                <TouchableOpacity style={styles.dangerBtn} onPress={handleCancelTrip}>
-                  <Text style={styles.btnText}>Hủy chuyến</Text>
-                </TouchableOpacity>
-              )}
-            </View>
+      <ScrollView
+        contentContainerStyle={styles.scroll}
+        keyboardShouldPersistTaps="handled"
+        showsVerticalScrollIndicator={false}
+      >
+        {tab === 'book' &&
+          (activeTrip ? (
+            <ActiveTripView
+              trip={activeTrip}
+              dispatchRingInfo={dispatchRingInfo}
+              publicTrackBaseUrl={publicConfig.publicTrackBaseUrl}
+              hotline={publicConfig.hotline}
+              onUpdated={(t) => setActiveTrip(t)}
+              onResetNewTrip={() => {
+                setActiveTrip(null);
+                setDispatchRingInfo(null);
+              }}
+            />
           ) : (
-            <View style={styles.card}>
-              <Text style={styles.label}>Điểm đón (Tự định vị GPS)</Text>
-              <TextInput style={styles.input} value={pickupAddress} onChangeText={setPickupAddress} />
-              <Text style={styles.label}>Điểm đến (Không bắt buộc)</Text>
-              <TextInput
-                style={styles.input}
-                value={dropoffAddress}
-                onChangeText={setDropoffAddress}
-                placeholder="Nhập điểm đến để xem giá dự kiến"
-              />
-              {dropoffAddress.length > 0 && (
-                <TouchableOpacity style={styles.secondaryBtn} onPress={handleEstimate}>
-                  <Text style={styles.secondaryText}>Xem giá dự kiến</Text>
-                </TouchableOpacity>
-              )}
-              {estimate && (
-                <View style={styles.estimateBox}>
-                  <Text style={styles.price}>
-                    {estimate.price.toLocaleString('vi-VN')}đ ({estimate.distanceKm} km · {estimate.timeSlot})
-                  </Text>
-                </View>
-              )}
-              <TouchableOpacity style={styles.primaryBtn} onPress={handleBookOneTap}>
-                <Text style={styles.btnText}>GỌI LÁI HỘ NGAY (1 CHẠM)</Text>
-              </TouchableOpacity>
-            </View>
-          )
-        ) : (
-          history.map((h) => (
-            <View key={h.id} style={styles.card}>
-              <Text style={styles.title}>{h.code} – {h.status}</Text>
-              <Text style={styles.info}>{h.pickupAddress} → {h.dropoffAddress || '—'}</Text>
-              <Text style={styles.price}>
-                {(h.finalPrice ?? h.estimatedPrice ?? 0).toLocaleString('vi-VN')}đ
-              </Text>
-              <Text style={styles.subtitle}>Ảnh/Video tình trạng xe: {h.media?.length ?? 0} tệp</Text>
-            </View>
-          ))
+            <BookingView
+              onTripCreated={(t) => {
+                setDispatchRingInfo(null);
+                setActiveTrip(t);
+                socketRef.current?.emit('trip:join', { tripId: t.id });
+              }}
+            />
+          ))}
+        {tab === 'history' && <HistoryTab history={history} />}
+        {tab === 'notifications' && (
+          <NotificationsTab
+            items={notifications}
+            onMarkAllRead={async () => {
+              await customerApi('/notifications/read-all', { method: 'POST' });
+              const list = await customerApi('/notifications');
+              setNotifications(list);
+            }}
+          />
+        )}
+        {tab === 'profile' && (
+          <ProfileTab user={user} onUpdated={setUser} onLogout={handleLogout} />
         )}
       </ScrollView>
+
+      {/* Floating Rounded White-Red Bottom Tab Dock */}
+      <View style={styles.dockWrap}>
+        <View style={styles.dock}>
+          {(
+            [
+              { id: 'book', label: 'TRANG CHỦ', icon: 'home', iconOff: 'home-outline' },
+              { id: 'history', label: 'HOẠT ĐỘNG', icon: 'time', iconOff: 'time-outline' },
+              { id: 'notifications', label: 'THÔNG BÁO', icon: 'notifications', iconOff: 'notifications-outline', badge: unreadCount },
+              { id: 'profile', label: 'TÀI KHOẢN', icon: 'person', iconOff: 'person-outline' },
+            ] as const
+          ).map((item) => {
+            const active = tab === item.id;
+            return (
+              <TouchableOpacity
+                key={item.id}
+                style={[styles.dockItem, active && styles.dockItemActive]}
+                onPress={() => {
+                  setTab(item.id);
+                  if (item.id === 'history') customerApi('/trips/my-history').then(setHistory).catch(() => undefined);
+                  if (item.id === 'notifications') customerApi('/notifications').then(setNotifications).catch(() => undefined);
+                }}
+              >
+                <View style={{ position: 'relative' }}>
+                  <Ionicons
+                    name={(active ? item.icon : item.iconOff) as any}
+                    size={20}
+                    color={active ? COLORS.primary : COLORS.textMuted}
+                  />
+                  {'badge' in item && item.badge > 0 ? <View style={styles.dotBadge} /> : null}
+                </View>
+                <Text style={[styles.dockLabel, active && styles.dockLabelActive]}>{item.label}</Text>
+              </TouchableOpacity>
+            );
+          })}
+        </View>
+      </View>
     </SafeAreaView>
   );
 }
 
+export default function App() {
+  return (
+    <SafeAreaProvider>
+      <CustomerAppContent />
+    </SafeAreaProvider>
+  );
+}
+
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#f8fafc', padding: 16 },
-  header: { marginBottom: 12 },
-  headerTitle: { fontSize: 18, fontWeight: '700', color: '#0f172a', marginBottom: 8 },
-  tabs: { flexDirection: 'row', gap: 8 },
-  tabBtn: { paddingVertical: 8, paddingHorizontal: 14, borderRadius: 8, backgroundColor: '#e2e8f0' },
-  tabActive: { backgroundColor: '#4f46e5' },
-  tabText: { fontWeight: '600', color: '#1e293b' },
-  scroll: { gap: 12, paddingBottom: 24 },
-  card: { backgroundColor: '#fff', borderRadius: 14, padding: 16, gap: 10, elevation: 2 },
-  title: { fontSize: 18, fontWeight: '700', color: '#0f172a' },
-  subtitle: { fontSize: 13, color: '#64748b' },
-  label: { fontSize: 13, fontWeight: '600', color: '#334155' },
-  input: { borderWidth: 1, borderColor: '#cbd5e1', borderRadius: 10, padding: 12, fontSize: 15 },
-  primaryBtn: { backgroundColor: '#4f46e5', padding: 14, borderRadius: 12, alignItems: 'center' },
-  secondaryBtn: { backgroundColor: '#e0e7ff', padding: 12, borderRadius: 10, alignItems: 'center' },
-  secondaryText: { color: '#3730a3', fontWeight: '600' },
-  callBtn: { backgroundColor: '#059669', padding: 12, borderRadius: 10, alignItems: 'center', marginTop: 6 },
-  dangerBtn: { backgroundColor: '#dc2626', padding: 12, borderRadius: 10, alignItems: 'center' },
-  btnText: { color: '#fff', fontWeight: '700', fontSize: 15 },
-  badge: { color: '#4f46e5', fontWeight: '700' },
-  info: { fontSize: 14, color: '#334155' },
-  price: { fontSize: 17, fontWeight: '700', color: '#059669' },
-  driverBox: { backgroundColor: '#f1f5f9', padding: 12, borderRadius: 10 },
-  estimateBox: { backgroundColor: '#ecfdf5', padding: 12, borderRadius: 10 },
+  center: { flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: COLORS.bg },
+  container: { flex: 1, backgroundColor: COLORS.bg },
+  topHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: 16,
+    paddingVertical: 10,
+    backgroundColor: '#FFFFFF',
+    borderBottomWidth: 1,
+    borderColor: '#FEE2E2',
+  },
+  greetRow: { flexDirection: 'row', alignItems: 'center', gap: 10 },
+  brandMiniLogo: { width: 38, height: 38, borderRadius: 11 },
+  helloSub: { fontSize: 11, color: COLORS.primary, fontWeight: '800' },
+  helloName: { fontSize: 15, fontWeight: '800', color: COLORS.text },
+  bellBtn: { width: 38, height: 38, borderRadius: 19, backgroundColor: '#FEF2F2', alignItems: 'center', justifyContent: 'center' },
+  bellBadge: { position: 'absolute', top: 2, right: 2, minWidth: 16, height: 16, borderRadius: 8, backgroundColor: COLORS.primary, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 3 },
+  bellBadgeTxt: { color: '#fff', fontSize: 9, fontWeight: '900' },
+  scroll: { paddingBottom: 92 },
+  dockWrap: { position: 'absolute', left: 14, right: 14, bottom: 12 },
+  dock: {
+    flexDirection: 'row',
+    backgroundColor: '#FFFFFF',
+    borderRadius: 24,
+    paddingVertical: 7,
+    paddingHorizontal: 6,
+    borderWidth: 1,
+    borderColor: '#FEE2E2',
+    ...SHADOW.dock,
+  },
+  dockItem: { flex: 1, alignItems: 'center', justifyContent: 'center', paddingVertical: 5, borderRadius: 18, gap: 2 },
+  dockItemActive: { backgroundColor: COLORS.primarySoft },
+  dockLabel: { fontSize: 9, fontWeight: '700', color: COLORS.textMuted },
+  dockLabelActive: { color: COLORS.primary, fontWeight: '800' },
+  dotBadge: { position: 'absolute', top: -2, right: -3, width: 7, height: 7, borderRadius: 4, backgroundColor: COLORS.primary },
 });

@@ -1,4 +1,4 @@
-import { PrismaClient } from '@prisma/client';
+import { PrismaClient, DriverStatus } from '@prisma/client';
 import * as bcrypt from 'bcryptjs';
 
 const prisma = new PrismaClient();
@@ -14,13 +14,20 @@ export const DEFAULT_SETTINGS: Record<string, string> = {
   distance_round_step: '0.1',
   commission_type: 'PERCENT', // PERCENT | FIXED
   commission_value: '20',
-  radius_km: '5',
+  radius_km: '3',
+  radius_steps_km: '3,6,10',
   offer_timeout_sec: '30',
   lock_minutes: '30',
   min_wallet_balance: '100000',
   maintenance_fee: '200000',
   remind_days_before: '3',
-  bank_info: 'Ngân hàng: Vietcombank | STK: 0123456789 | Chủ TK: CONG TY LAI XE HO',
+  bank_code: 'MB',
+  bank_name: 'MB Bank',
+  bank_account: '0973521456',
+  bank_owner: 'NGUYEN VAN TUAN',
+  hotline: '0973521456',
+  public_track_base_url: 'https://tuannv.site',
+  bank_info: 'Ngân hàng: MB Bank | STK: 0973521456 | Chủ TK: NGUYEN VAN TUAN',
 };
 
 async function main() {
@@ -44,7 +51,57 @@ async function main() {
     });
   }
 
-  console.log('Seeded default admin and settings.');
+  // Demo customer
+  await prisma.customer.upsert({
+    where: { phone: '0900000001' },
+    update: {},
+    create: {
+      phone: '0900000001',
+      name: 'Nguyễn Văn Khách',
+    },
+  });
+
+  // Demo active drivers for immediate dispatch/testing
+  const nextMonth = new Date();
+  nextMonth.setMonth(nextMonth.getMonth() + 1);
+
+  const demoDrivers = [
+    { phone: '0900000002', name: 'Trần Văn Tài', lat: 21.5942, lng: 105.8482, balance: 500000 },
+    { phone: '0900000003', name: 'Lê Minh Bình', lat: 21.5915, lng: 105.8435, balance: 300000 },
+  ];
+
+  for (const d of demoDrivers) {
+    const existing = await prisma.driver.findUnique({ where: { phone: d.phone } });
+    if (!existing) {
+      await prisma.driver.create({
+        data: {
+          phone: d.phone,
+          name: d.name,
+          status: DriverStatus.ACTIVE,
+          isOnline: false,
+          lat: d.lat,
+          lng: d.lng,
+          locationAt: new Date(),
+          feeDueDate: nextMonth,
+          wallet: {
+            create: {
+              balance: d.balance,
+              transactions: {
+                create: {
+                  type: 'TOPUP',
+                  amount: d.balance,
+                  balanceAfter: d.balance,
+                  note: 'Số dư khởi tạo demo',
+                },
+              },
+            },
+          },
+        },
+      });
+    }
+  }
+
+  console.log('Seeded default admin, settings, demo customer (0900000001), and demo drivers (0900000002, 0900000003).');
 }
 
 main()

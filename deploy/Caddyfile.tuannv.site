@@ -1,0 +1,33 @@
+# Caddyfile mẫu triển khai tạm trên domain tuannv.site (Auto HTTPS Let's Encrypt)
+# Sau này đổi sang domain chính thức: thay tuannv.site -> domain mới và cập nhật ô
+# "Tên miền công khai chia sẻ hành trình" trong Web Admin -> Cấu hình & Nhật ký.
+
+api.tuannv.site {
+    reverse_proxy 127.0.0.1:3005
+}
+
+tuannv.site, www.tuannv.site {
+    # Trang chia sẻ hành trình trực tiếp & media upload dùng trực tiếp trên tuannv.site
+    handle /track/* {
+        reverse_proxy 127.0.0.1:3005
+    }
+    handle /trips/share/* {
+        reverse_proxy 127.0.0.1:3005
+    }
+    handle /uploads/* {
+        reverse_proxy 127.0.0.1:3005
+    }
+    handle /media/* {
+        reverse_proxy 127.0.0.1:3005
+    }
+    handle /ws* {
+        reverse_proxy 127.0.0.1:3005
+    }
+
+    # Web Admin (SPA build từ web-admin/dist)
+    handle {
+        root * /var/www/laixeho/web-admin/dist
+        try_files {path} /index.html
+        file_server
+    }
+}

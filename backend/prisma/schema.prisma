@@ -97,6 +97,7 @@ model Driver {
   dispatchOffers  DispatchOffer[]
   driverLocks     DriverLock[]
   maintenanceFees MaintenanceFee[]
+  paymentIntents  PaymentIntent[]
 
   @@map("drivers")
 }
@@ -133,13 +134,22 @@ model Trip {
   dropoffLat       Float?     @map("dropoff_lat")
   dropoffLng       Float?     @map("dropoff_lng")
 
-  distanceKm       Float?     @map("distance_km")
-  routePolyline    String?    @map("route_polyline")
-  timeSlot         TimeSlot   @map("time_slot")
-  estimatedPrice   Int?       @map("estimated_price")
-  finalPrice       Int?       @map("final_price")
-  commissionAmount Int?       @map("commission_amount")
-  note             String?
+  distanceKm          Float?     @map("distance_km")
+  routePolyline       String?    @map("route_polyline")
+  actualRoutePolyline String?    @map("actual_route_polyline")
+  routeSource         String?    @map("route_source")
+  pricingSnapshot     Json?      @map("pricing_snapshot")
+  timeSlot            TimeSlot   @map("time_slot")
+  estimatedPrice      Int?       @map("estimated_price")
+  finalPrice          Int?       @map("final_price")
+  commissionAmount    Int?       @map("commission_amount")
+  isBookingForOther   Boolean    @default(false) @map("is_booking_for_other")
+  passengerName       String?    @map("passenger_name")
+  passengerPhone      String?    @map("passenger_phone")
+  partnerCode         String?    @map("partner_code")
+  partnerCommission   Int?       @map("partner_commission")
+  shareToken          String?    @unique @map("share_token")
+  note                String?
 
   status           TripStatus @default(SEARCHING)
   orderedAt        DateTime   @default(now()) @map("ordered_at")
@@ -156,10 +166,12 @@ model Trip {
   media              TripMedia[]
   dispatchOffers     DispatchOffer[]
   walletTransactions WalletTransaction[]
+  sosAlerts          SosAlert[]
 
   @@index([status])
   @@index([customerId])
   @@index([driverId])
+  @@index([partnerCode])
   @@map("trips")
 }
 
@@ -300,4 +312,66 @@ model AuditLog {
 
   @@index([adminId])
   @@map("audit_logs")
+}
+
+model PaymentIntent {
+  id                 String    @id @default(uuid())
+  txCode             String    @unique @map("tx_code")
+  driverId           String    @map("driver_id")
+  purpose            String    // WALLET_TOPUP | MAINTENANCE_FEE
+  period             String?   // YYYY-MM for MAINTENANCE_FEE
+  amount             Int
+  bankCode           String    @map("bank_code")
+  bankAccount        String    @map("bank_account")
+  bankOwner          String    @map("bank_owner")
+  transferContent    String    @map("transfer_content")
+  qrUrl              String    @map("qr_url")
+  proofImageUrl      String?   @map("proof_image_url")
+  proofUploadedAt    DateTime? @map("proof_uploaded_at")
+  status             String    @default("PENDING") // PENDING | CONFIRMED | CANCELLED
+  confirmedByAdminId String?   @map("confirmed_by_admin_id")
+  confirmedAt        DateTime? @map("confirmed_at")
+  createdAt          DateTime  @default(now()) @map("created_at")
+
+  driver Driver @relation(fields: [driverId], references: [id])
+
+  @@index([driverId])
+  @@index([status])
+  @@map("payment_intents")
+}
+
+model SosAlert {
+  id                String    @id @default(uuid())
+  tripId            String    @map("trip_id")
+  reporterRole      String    @map("reporter_role") // CUSTOMER | DRIVER
+  reporterId        String    @map("reporter_id")
+  reporterName      String?   @map("reporter_name")
+  reporterPhone     String?   @map("reporter_phone")
+  lat               Float?
+  lng               Float?
+  note              String?
+  status            String    @default("OPEN") // OPEN | RESOLVED
+  resolvedByAdminId String?   @map("resolved_by_admin_id")
+  resolvedAt        DateTime? @map("resolved_at")
+  createdAt         DateTime  @default(now()) @map("created_at")
+
+  trip Trip @relation(fields: [tripId], references: [id], onDelete: Cascade)
+
+  @@index([status])
+  @@index([tripId])
+  @@map("sos_alerts")
+}
+
+model Partner {
+  id                String   @id @default(uuid())
+  code              String   @unique
+  name              String
+  contactName       String?  @map("contact_name")
+  phone             String?
+  address           String?
+  commissionPerTrip Int      @default(15000) @map("commission_per_trip")
+  isActive          Boolean  @default(true) @map("is_active")
+  createdAt         DateTime @default(now()) @map("created_at")
+
+  @@map("partners")
 }

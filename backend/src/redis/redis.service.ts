@@ -1,21 +1,38 @@
-import { Injectable, Logger, OnModuleDestroy } from '@nestjs/common';
+import { Injectable, Logger, OnModuleDestroy, OnModuleInit } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import Redis from 'ioredis';
 
 @Injectable()
-export class RedisService implements OnModuleDestroy {
+export class RedisService implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(RedisService.name);
   private client: Redis | null = null;
   private readonly memoryStore = new Map<string, { value: string; expiresAt?: number }>();
+  private readonly memoryGeo = new Map<string, { lat: number; lng: number }>();
 
   constructor(private readonly config: ConfigService) {
-    if (process.env.SKIP_REDIS_CONNECT !== 'true') {
+    if (this.config.get<string>('SKIP_REDIS_CONNECT') !== 'true') {
       const host = this.config.get<string>('REDIS_HOST', 'localhost');
-      const port = this.config.get<number>('REDIS_PORT', 6379);
-      this.client = new Redis({ host, port, lazyConnect: true, maxRetriesPerRequest: 2 });
-      this.client.on('error', (err) => {
-        this.logger.warn(`Redis connection warning: ${err.message}`);
+      const port = Number(this.config.get<string>('REDIS_PORT', '6379'));
+      this.client = new Redis({
+        host,
+        port,
+        lazyConnect: true,
+        maxRetriesPerRequest: 1,
+        retryStrategy: (times) => (times <= 2 ? Math.min(times * 500, 1500) : null),
       });
+      this.client.on('error', (err) => {
+        this.logger.warn(`Redis unavailable, using in-memory fallback (${err.message})`);
+      });
+    }
+  }
+
+  async onModuleInit() {
+    if (!this.client) return;
+    try {
+      await this.client.connect();
+      this.logger.log('Connected to Redis');
+    } catch {
+      this.logger.warn('Redis server not reachable; running with in-memory fallback');
     }
   }
 
@@ -56,12 +73,14 @@ export class RedisService implements OnModuleDestroy {
   }
 
   async geoAddDriver(driverId: string, lng: number, lat: number): Promise<void> {
+    this.memoryGeo.set(driverId, { lat, lng });
     if (this.client?.status === 'ready') {
       await this.client.geoadd('drivers:online', lng, lat, driverId);
     }
   }
 
   async geoRemoveDriver(driverId: string): Promise<void> {
+    this.memoryGeo.delete(driverId);
     if (this.client?.status === 'ready') {
       await this.client.zrem('drivers:online', driverId);
     }
@@ -89,7 +108,28 @@ export class RedisService implements OnModuleDestroy {
         distanceKm: parseFloat(dist),
       }));
     }
-    return [];
+
+    const candidates: Array<{ driverId: string; distanceKm: number }> = [];
+    for (const [driverId, pos] of this.memoryGeo.entries()) {
+      const dist = this.haversineKm(lat, lng, pos.lat, pos.lng);
+      if (dist <= radiusKm) {
+        candidates.push({ driverId, distanceKm: dist });
+      }
+    }
+    return candidates.sort((a, b) => a.distanceKm - b.distanceKm);
+  }
+
+  private haversineKm(lat1: number, lng1: number, lat2: number, lng2: number): number {
+    const R = 6371;
+    const dLat = ((lat2 - lat1) * Math.PI) / 180;
+    const dLng = ((lng2 - lng1) * Math.PI) / 180;
+    const a =
+      Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+      Math.cos((lat1 * Math.PI) / 180) *
+        Math.cos((lat2 * Math.PI) / 180) *
+        Math.sin(dLng / 2) *
+        Math.sin(dLng / 2);
+    return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
   }
 
   async onModuleDestroy() {

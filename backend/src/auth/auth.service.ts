@@ -19,22 +19,29 @@ export class AuthService {
   async requestOtp(phone: string, userType: 'CUSTOMER' | 'DRIVER') {
     const normalized = phone.trim();
     if (!/^0\d{8,10}$/.test(normalized)) {
-      throw new BadRequestException('Số điện thoại không hợp lệ');
+      throw new BadRequestException('Số điện thoại không hợp lệ (bắt đầu bằng 0, 9–11 số)');
     }
+
+    const bypassPhones = this.config
+      .get<string>('OTP_BYPASS_PHONES', '')
+      .split(',')
+      .map((p) => p.trim())
+      .filter(Boolean);
+    const isBypass = bypassPhones.includes(normalized);
 
     const rateKey = `otp:rate:${userType}:${normalized}`;
-    const recent = await this.redis.get(rateKey);
-    if (recent) {
-      throw new BadRequestException('Vui lòng đợi 60 giây trước khi gửi lại OTP');
+    if (!isBypass) {
+      const recent = await this.redis.get(rateKey);
+      if (recent) {
+        throw new BadRequestException('Vui lòng đợi 60 giây trước khi gửi lại OTP');
+      }
     }
 
-    const bypassPhones = this.config.get<string>('OTP_BYPASS_PHONES', '').split(',');
-    const isBypass = bypassPhones.includes(normalized);
     const otp = isBypass
       ? '123456'
       : Math.floor(100000 + Math.random() * 900000).toString();
 
-    const ttl = this.config.get<number>('OTP_TTL_SECONDS', 300);
+    const ttl = Number(this.config.get<string>('OTP_TTL_SECONDS', '300'));
     await this.redis.set(`otp:code:${userType}:${normalized}`, otp, ttl);
     await this.redis.set(rateKey, '1', 60);
 
@@ -42,14 +49,13 @@ export class AuthService {
     if (smsProvider === 'mock' || isBypass) {
       this.logger.log(`[MOCK SMS] OTP for ${userType} ${normalized}: ${otp}`);
     } else {
-      // Hook for eSMS / Twilio provider in production
       this.logger.log(`[SMS:${smsProvider}] Sent OTP to ${normalized}`);
     }
 
     return {
       message: 'Đã gửi mã OTP',
       expiresInSeconds: ttl,
-      ...(smsProvider === 'mock' ? { devOtp: otp } : {}),
+      ...(smsProvider === 'mock' || isBypass ? { devOtp: otp } : {}),
     };
   }
 
@@ -67,7 +73,7 @@ export class AuthService {
       let customer = await this.prisma.customer.findUnique({ where: { phone: normalized } });
       if (!customer) {
         customer = await this.prisma.customer.create({
-          data: { phone: normalized, name: name ?? null },
+          data: { phone: normalized, name: name?.trim() || null },
         });
       }
       const accessToken = this.jwt.sign({
@@ -80,16 +86,16 @@ export class AuthService {
 
     let driver = await this.prisma.driver.findUnique({
       where: { phone: normalized },
-      include: { wallet: true },
+      include: { wallet: true, maintenanceFees: { orderBy: { dueDate: 'desc' }, take: 3 } },
     });
     if (!driver) {
       driver = await this.prisma.driver.create({
         data: {
           phone: normalized,
-          name: name ?? null,
+          name: name?.trim() || null,
           wallet: { create: { balance: 0 } },
         },
-        include: { wallet: true },
+        include: { wallet: true, maintenanceFees: { orderBy: { dueDate: 'desc' }, take: 3 } },
       });
     }
     const accessToken = this.jwt.sign({
@@ -98,6 +104,35 @@ export class AuthService {
       phone: driver.phone,
     });
     return { accessToken, user: driver, role: 'DRIVER' };
+  }
+
+  async getMe(userId: string, role: 'CUSTOMER' | 'DRIVER') {
+    if (role === 'CUSTOMER') {
+      return this.prisma.customer.findUnique({ where: { id: userId } });
+    }
+    return this.prisma.driver.findUnique({
+      where: { id: userId },
+      include: {
+        wallet: true,
+        maintenanceFees: { orderBy: { dueDate: 'desc' }, take: 6 },
+      },
+    });
+  }
+
+  async updateCustomerProfile(customerId: string, name: string) {
+    return this.prisma.customer.update({
+      where: { id: customerId },
+      data: { name: name.trim() },
+    });
+  }
+
+  async registerFcmToken(userId: string, role: 'CUSTOMER' | 'DRIVER', fcmToken: string) {
+    if (role === 'CUSTOMER') {
+      await this.prisma.customer.update({ where: { id: userId }, data: { fcmToken } });
+    } else {
+      await this.prisma.driver.update({ where: { id: userId }, data: { fcmToken } });
+    }
+    return { ok: true };
   }
 
   async adminLogin(username: string, password: string) {

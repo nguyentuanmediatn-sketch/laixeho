@@ -6,6 +6,7 @@ dist/
 build/
 .expo/
 .next/
+*.tsbuildinfo
 
 # Environment & secrets
 .env
@@ -20,3 +21,13 @@ Thumbs.db
 
 # Coverage
 coverage/
+
+# Local uploads & generated native builds
+backend/uploads/
+builds/
+mobile-customer/android/
+mobile-customer/ios/
+mobile-driver/android/
+mobile-driver/ios/
+*.apk
+

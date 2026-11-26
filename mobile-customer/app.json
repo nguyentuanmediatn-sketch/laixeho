@@ -1,10 +1,20 @@
 {
   "expo": {
-    "name": "Lái Xe Hộ - Khách Hàng",
+    "name": "NOW TN - Lái Xe Hộ",
     "slug": "lai-xe-ho-khach-hang",
     "version": "1.0.0",
     "orientation": "portrait",
+    "icon": "./assets/icon.png",
     "platforms": ["ios", "android"],
+    "plugins": [
+      [
+        "expo-location",
+        {
+          "locationWhenInUsePermission": "Ứng dụng cần vị trí của bạn để tự động định vị điểm đón tài xế lái xe hộ."
+        }
+      ],
+      "./plugins/with-cleartext-traffic.js"
+    ],
     "ios": {
       "bundleIdentifier": "vn.laixeho.customer",
       "infoPlist": {
@@ -13,7 +23,11 @@
     },
     "android": {
       "package": "vn.laixeho.customer",
-      "permissions": ["ACCESS_FINE_LOCATION", "ACCESS_COARSE_LOCATION"]
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/icon.png",
+        "backgroundColor": "#E51922"
+      },
+      "permissions": ["ACCESS_FINE_LOCATION", "ACCESS_COARSE_LOCATION", "INTERNET"]
     }
   }
 }

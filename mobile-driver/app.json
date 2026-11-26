@@ -1,10 +1,28 @@
 {
   "expo": {
-    "name": "Lái Xe Hộ - Tài Xế",
+    "name": "NOW TN - Tài Xế",
     "slug": "lai-xe-ho-tai-xe",
     "version": "1.0.0",
     "orientation": "portrait",
+    "icon": "./assets/icon.png",
     "platforms": ["ios", "android"],
+    "plugins": [
+      [
+        "expo-location",
+        {
+          "locationWhenInUsePermission": "Ứng dụng cần vị trí để nhận đơn lái xe hộ gần bạn."
+        }
+      ],
+      [
+        "expo-image-picker",
+        {
+          "cameraPermission": "Ứng dụng cần camera để chụp ảnh và quay video tình trạng xe khi nhận và trả xe.",
+          "microphonePermission": "Ứng dụng cần micro khi quay video kiểm tra tình trạng xe.",
+          "photosPermission": "Ứng dụng cần thư viện ảnh để tải lên giấy tờ hồ sơ CCCD/GPLX."
+        }
+      ],
+      "./plugins/with-cleartext-traffic.js"
+    ],
     "ios": {
       "bundleIdentifier": "vn.laixeho.driver",
       "infoPlist": {
@@ -16,11 +34,17 @@
     },
     "android": {
       "package": "vn.laixeho.driver",
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/icon.png",
+        "backgroundColor": "#E51922"
+      },
       "permissions": [
         "ACCESS_FINE_LOCATION",
         "ACCESS_COARSE_LOCATION",
         "CAMERA",
-        "RECORD_AUDIO"
+        "RECORD_AUDIO",
+        "VIBRATE",
+        "INTERNET"
       ]
     }
   }

@@ -1,13 +1,14 @@
 import {
   Body,
   Controller,
+  Delete,
   Get,
   Param,
   Patch,
   Post,
   Req,
 } from '@nestjs/common';
-import { IsEnum, IsNumber, IsOptional, IsBoolean, IsString } from 'class-validator';
+import { IsBoolean, IsEnum, IsNotEmpty, IsNumber, IsOptional, IsString } from 'class-validator';
 import { MediaStage, MediaType } from '@prisma/client';
 import { Auth } from '../auth/auth.decorator';
 import { TripsService } from './trips.service';
@@ -22,12 +23,22 @@ class EstimateDto {
 }
 
 class CreateTripDto {
-  @IsString() pickupAddress: string;
+  @IsString() @IsNotEmpty() pickupAddress: string;
   @IsNumber() pickupLat: number;
   @IsNumber() pickupLng: number;
   @IsOptional() @IsString() dropoffAddress?: string;
   @IsOptional() @IsNumber() dropoffLat?: number;
   @IsOptional() @IsNumber() dropoffLng?: number;
+  @IsOptional() @IsBoolean() isBookingForOther?: boolean;
+  @IsOptional() @IsString() passengerName?: string;
+  @IsOptional() @IsString() passengerPhone?: string;
+  @IsOptional() @IsString() partnerCode?: string;
+  @IsOptional() @IsString() note?: string;
+}
+
+class SosDto {
+  @IsOptional() @IsNumber() lat?: number;
+  @IsOptional() @IsNumber() lng?: number;
   @IsOptional() @IsString() note?: string;
 }
 
@@ -35,11 +46,31 @@ class AddMediaDto {
   @IsEnum(MediaType) type: MediaType;
   @IsEnum(MediaStage) stage: MediaStage;
   @IsOptional() @IsBoolean() isPlatePhoto?: boolean;
-  @IsString() url: string;
+  @IsString() @IsNotEmpty() url: string;
   @IsOptional() @IsNumber() size?: number;
   @IsOptional() @IsNumber() durationSec?: number;
   @IsOptional() @IsNumber() lat?: number;
   @IsOptional() @IsNumber() lng?: number;
+}
+
+class PresignMediaDto {
+  @IsOptional() @IsString() ext?: string;
+  @IsOptional() @IsString() contentType?: string;
+}
+
+class UpdateDropoffDto {
+  @IsString() @IsNotEmpty() dropoffAddress: string;
+  @IsNumber() dropoffLat: number;
+  @IsNumber() dropoffLng: number;
+}
+
+class CompleteTripDto {
+  @IsOptional() @IsNumber() actualDropoffLat?: number;
+  @IsOptional() @IsNumber() actualDropoffLng?: number;
+}
+
+class CancelTripDto {
+  @IsOptional() @IsString() reason?: string;
 }
 
 @Controller('trips')
@@ -64,6 +95,15 @@ export class TripsController {
     });
   }
 
+  @Auth('CUSTOMER', 'DRIVER')
+  @Get('active')
+  getActive(@Req() req: any) {
+    if (req.user.role === 'DRIVER') {
+      return this.tripsService.getActiveForDriver(req.user.sub);
+    }
+    return this.tripsService.getActiveForCustomer(req.user.sub);
+  }
+
   @Auth('CUSTOMER')
   @Get('my-history')
   customerHistory(@Req() req: any) {
@@ -71,7 +111,7 @@ export class TripsController {
       where: { customerId: req.user.sub },
       include: {
         driver: { select: { id: true, name: true, phone: true, avatarUrl: true } },
-        media: true,
+        media: { orderBy: { takenAt: 'asc' } },
       },
       orderBy: { orderedAt: 'desc' },
       take: 50,
@@ -85,24 +125,40 @@ export class TripsController {
       where: { driverId: req.user.sub },
       include: {
         customer: { select: { id: true, name: true, phone: true } },
-        media: true,
+        media: { orderBy: { takenAt: 'asc' } },
       },
       orderBy: { orderedAt: 'desc' },
       take: 50,
     });
   }
 
+  @Get('config')
+  async getPublicConfig() {
+    const rows = await this.prisma.setting.findMany({
+      where: { key: { in: ['public_track_base_url', 'hotline'] } },
+    });
+    const map = Object.fromEntries(rows.map((r) => [r.key, r.value]));
+    return {
+      publicTrackBaseUrl: (map.public_track_base_url || 'https://tuannv.site').replace(/\/+$/, ''),
+      hotline: map.hotline || '0973521456',
+    };
+  }
+
+  @Get('share/:token')
+  getSharedTrip(@Param('token') token: string) {
+    return this.tripsService.getSharedTrip(token);
+  }
+
   @Auth('CUSTOMER', 'DRIVER', 'ADMIN')
   @Get(':id')
-  getDetail(@Param('id') id: string) {
-    return this.prisma.trip.findUnique({
-      where: { id },
-      include: {
-        customer: { select: { id: true, name: true, phone: true } },
-        driver: { select: { id: true, name: true, phone: true, avatarUrl: true, lat: true, lng: true } },
-        media: true,
-      },
-    });
+  getDetail(@Req() req: any, @Param('id') id: string) {
+    return this.tripsService.getTripDetailForUser(id, req.user.role, req.user.sub);
+  }
+
+  @Auth('CUSTOMER', 'DRIVER')
+  @Post(':id/sos')
+  triggerSos(@Req() req: any, @Param('id') id: string, @Body() body: SosDto) {
+    return this.tripsService.triggerSos(id, req.user.role, req.user.sub, body?.lat, body?.lng, body?.note);
   }
 
   @Auth('DRIVER')
@@ -125,11 +181,19 @@ export class TripsController {
 
   @Auth('DRIVER')
   @Post(':id/media/presign')
-  presignMedia(
+  async presignMedia(
+    @Req() req: any,
     @Param('id') id: string,
-    @Body() body: { ext: string; contentType: string },
+    @Body() body: PresignMediaDto,
   ) {
-    return this.storage.createPresignedUpload(`trips/${id}`, body.ext || 'jpg', body.contentType || 'image/jpeg');
+    await this.tripsService.assertDriverCanUploadMedia(id, req.user.sub);
+    const origin = `${req.protocol}://${req.get('host')}`;
+    return this.storage.createPresignedUpload(
+      `trips/${id}`,
+      body.ext || 'jpg',
+      body.contentType || 'image/jpeg',
+      origin,
+    );
   }
 
   @Auth('DRIVER')
@@ -139,20 +203,27 @@ export class TripsController {
   }
 
   @Auth('DRIVER')
+  @Delete(':id/media/:mediaId')
+  deleteMedia(@Req() req: any, @Param('id') id: string, @Param('mediaId') mediaId: string) {
+    return this.tripsService.deleteMedia(id, req.user.sub, mediaId);
+  }
+
+  @Auth('DRIVER')
   @Post(':id/start')
   startTrip(@Req() req: any, @Param('id') id: string) {
     return this.tripsService.startTrip(id, req.user.sub);
   }
 
-  @Auth('CUSTOMER')
+  @Auth('CUSTOMER', 'DRIVER', 'ADMIN')
   @Patch(':id/dropoff')
   updateDropoff(
     @Req() req: any,
     @Param('id') id: string,
-    @Body() body: { dropoffAddress: string; dropoffLat: number; dropoffLng: number },
+    @Body() body: UpdateDropoffDto,
   ) {
     return this.tripsService.updateDropoff(
       id,
+      req.user.role,
       req.user.sub,
       body.dropoffAddress,
       body.dropoffLat,
@@ -165,14 +236,14 @@ export class TripsController {
   completeTrip(
     @Req() req: any,
     @Param('id') id: string,
-    @Body() body: { actualDropoffLat?: number; actualDropoffLng?: number },
+    @Body() body: CompleteTripDto,
   ) {
     return this.tripsService.completeTrip(id, req.user.sub, body?.actualDropoffLat, body?.actualDropoffLng);
   }
 
   @Auth('CUSTOMER', 'ADMIN')
   @Post(':id/cancel')
-  cancelTrip(@Req() req: any, @Param('id') id: string, @Body() body: { reason?: string }) {
+  cancelTrip(@Req() req: any, @Param('id') id: string, @Body() body: CancelTripDto) {
     return this.tripsService.cancelTrip(id, req.user.role, req.user.sub, body?.reason);
   }
 }

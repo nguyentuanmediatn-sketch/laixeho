@@ -8,7 +8,10 @@ import {
   WebSocketServer,
 } from '@nestjs/websockets';
 import { Logger } from '@nestjs/common';
+import { JwtService } from '@nestjs/jwt';
 import { Server, Socket } from 'socket.io';
+import { PrismaService } from '../prisma/prisma.service';
+import { JwtPayload } from '../auth/jwt.strategy';
 
 @WebSocketGateway({
   cors: { origin: '*' },
@@ -20,13 +23,36 @@ export class RealtimeGateway implements OnGatewayConnection, OnGatewayDisconnect
   @WebSocketServer()
   server: Server;
 
+  constructor(
+    private readonly jwtService: JwtService,
+    private readonly prisma: PrismaService,
+  ) {}
+
   handleConnection(client: Socket) {
-    const userId = client.handshake.query.userId as string | undefined;
-    const role = client.handshake.query.role as string | undefined;
-    if (userId && role) {
-      client.join(`${role.toLowerCase()}:${userId}`);
+    const rawAuth =
+      (client.handshake.auth?.token as string | undefined) ||
+      (client.handshake.query?.token as string | undefined) ||
+      (client.handshake.headers?.authorization as string | undefined)?.replace(/^Bearer\s+/i, '');
+
+    if (!rawAuth) {
+      this.logger.warn(`WS rejected (no token): ${client.id}`);
+      client.disconnect(true);
+      return;
     }
-    this.logger.debug(`WS connected: ${client.id} (${role ?? 'unknown'}:${userId ?? 'anon'})`);
+
+    try {
+      const payload = this.jwtService.verify<JwtPayload>(rawAuth);
+      client.data.user = payload;
+      const room = `${payload.role.toLowerCase()}:${payload.sub}`;
+      client.join(room);
+      if (payload.role === 'ADMIN') {
+        client.join('admins');
+      }
+      this.logger.debug(`WS connected: ${client.id} (${room})`);
+    } catch {
+      this.logger.warn(`WS rejected (invalid token): ${client.id}`);
+      client.disconnect(true);
+    }
   }
 
   handleDisconnect(client: Socket) {
@@ -34,10 +60,28 @@ export class RealtimeGateway implements OnGatewayConnection, OnGatewayDisconnect
   }
 
   @SubscribeMessage('trip:join')
-  handleJoinTrip(@ConnectedSocket() client: Socket, @MessageBody() data: { tripId: string }) {
-    if (data?.tripId) {
+  async handleJoinTrip(@ConnectedSocket() client: Socket, @MessageBody() data: { tripId: string }) {
+    const user = client.data.user as JwtPayload | undefined;
+    if (!user || !data?.tripId) return { ok: false };
+
+    if (user.role === 'ADMIN') {
       client.join(`trip:${data.tripId}`);
+      return { ok: true };
     }
+
+    const trip = await this.prisma.trip.findUnique({
+      where: { id: data.tripId },
+      select: { customerId: true, driverId: true },
+    });
+    if (!trip) return { ok: false };
+    if (
+      (user.role === 'CUSTOMER' && trip.customerId === user.sub) ||
+      (user.role === 'DRIVER' && trip.driverId === user.sub)
+    ) {
+      client.join(`trip:${data.tripId}`);
+      return { ok: true };
+    }
+    return { ok: false };
   }
 
   emitToDriver(driverId: string, event: string, payload: any) {
@@ -53,6 +97,6 @@ export class RealtimeGateway implements OnGatewayConnection, OnGatewayDisconnect
   }
 
   emitToAdmin(event: string, payload: any) {
-    this.server?.emit(`admin:${event}`, payload);
+    this.server?.to('admins').emit(`admin:${event}`, payload);
   }
 }

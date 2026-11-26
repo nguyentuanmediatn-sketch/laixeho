@@ -7,56 +7,64 @@ import {
   PlusCircle,
   Wallet,
   LogOut,
+  RefreshCw,
+  Landmark,
+  Store,
+  AlertOctagon,
+  ExternalLink,
   CheckCircle2,
-  Lock,
-  AlertTriangle,
-  History,
 } from 'lucide-react';
-import { apiFetch, getToken, setToken } from './api';
+import { io } from 'socket.io-client';
+import { API_BASE, apiFetch, fmtDateTime, getToken, setToken } from './api';
+import { DashboardTab } from './components/dashboard-tab';
+import { ManualTripTab } from './components/manual-trip-tab';
+import { TripsTab } from './components/trips-tab';
+import { DriversTab } from './components/drivers-tab';
+import { CustomersTab } from './components/customers-tab';
+import { SettingsTab } from './components/settings-tab';
+import { FinanceTab } from './components/finance-tab';
+import { PartnersTab } from './components/partners-tab';
 
-type Tab = 'dashboard' | 'manual' | 'trips' | 'drivers' | 'customers' | 'settings';
-
-const fmtMoney = (n?: number | null) =>
-  n != null ? `${n.toLocaleString('vi-VN')}đ` : '—';
+type Tab = 'dashboard' | 'manual' | 'trips' | 'finance' | 'drivers' | 'partners' | 'customers' | 'settings';
 
 export default function App() {
   const [token, setAuthToken] = useState<string | null>(getToken());
   const [tab, setTab] = useState<Tab>('dashboard');
+  const [tripsInitialFilter, setTripsInitialFilter] = useState<string>('ALL');
   const [username, setUsername] = useState('admin');
   const [password, setPassword] = useState('');
   const [loginErr, setLoginErr] = useState('');
 
+  const [dateFrom, setDateFrom] = useState('');
+  const [dateTo, setDateTo] = useState('');
   const [stats, setStats] = useState<any>(null);
   const [trips, setTrips] = useState<any[]>([]);
   const [drivers, setDrivers] = useState<any[]>([]);
   const [customers, setCustomers] = useState<any[]>([]);
   const [settings, setSettings] = useState<Record<string, string>>({});
   const [auditLogs, setAuditLogs] = useState<any[]>([]);
-  const [selectedTrip, setSelectedTrip] = useState<any>(null);
+  const [sosAlerts, setSosAlerts] = useState<any[]>([]);
+  const [partners, setPartners] = useState<any[]>([]);
+  const [financeRefreshKey, setFinanceRefreshKey] = useState(0);
   const [statusMsg, setStatusMsg] = useState('');
+  const [wsConnected, setWsConnected] = useState(false);
 
-  // Manual trip form
-  const [manualForm, setManualForm] = useState({
-    customerPhone: '',
-    customerName: '',
-    pickupAddress: '',
-    pickupLat: '10.7769',
-    pickupLng: '106.7009',
-    dropoffAddress: '',
-    dropoffLat: '10.8012',
-    dropoffLng: '106.7145',
-    note: '',
-  });
-
-  const loadData = async () => {
+  const loadData = async (from = dateFrom, to = dateTo) => {
     try {
-      const [st, tr, dr, cu, se, au] = await Promise.all([
-        apiFetch('/admin/stats'),
+      const params = new URLSearchParams();
+      if (from) params.set('from', from);
+      if (to) params.set('to', to);
+      const q = params.toString() ? `?${params.toString()}` : '';
+
+      const [st, tr, dr, cu, se, au, sos, pa] = await Promise.all([
+        apiFetch(`/admin/stats${q}`),
         apiFetch('/admin/trips'),
         apiFetch('/admin/drivers'),
         apiFetch('/admin/customers'),
         apiFetch('/admin/settings'),
         apiFetch('/admin/audit-logs'),
+        apiFetch('/admin/sos-alerts?status=OPEN'),
+        apiFetch('/admin/partners'),
       ]);
       setStats(st);
       setTrips(tr);
@@ -64,14 +72,71 @@ export default function App() {
       setCustomers(cu);
       setSettings(Object.fromEntries(se.map((s: any) => [s.key, s.value])));
       setAuditLogs(au);
+      setSosAlerts(sos);
+      setPartners(pa);
     } catch (e: any) {
       setStatusMsg(e.message);
+      if (e.message.includes('hết hạn')) setAuthToken(null);
     }
   };
 
   useEffect(() => {
-    if (token) loadData();
+    if (!token) return;
+    loadData();
+    const socket = io(`${API_BASE}/ws`, { auth: { token } });
+    socket.on('connect', () => setWsConnected(true));
+    socket.on('disconnect', () => setWsConnected(false));
+    socket.on('admin:trip:no_driver', (payload: any) => {
+      setStatusMsg(`⚠️ CẢNH BÁO: Đơn ${payload.tripCode} không tìm được tài xế (NO_DRIVER)!`);
+      loadData();
+    });
+    socket.on('admin:trip:dispatch_ring', (payload: any) => {
+      setStatusMsg(
+        `📡 Điều phối mở rộng: Đơn ${payload.tripCode} đang quét vòng ${payload.ring} (bán kính ${payload.radiusKm} km).`,
+      );
+    });
+    socket.on('admin:trip:suspicious_cancel', (payload: any) => {
+      setStatusMsg(
+        `🚨 NGHI VẤN CẮT CẦU: Đơn ${payload.tripCode} bị khách hủy sau khi tài xế đã nhận/đến nơi (${payload.reason || 'không rõ lý do'}).`,
+      );
+      loadData();
+    });
+    socket.on('admin:payment:created', (payload: any) => {
+      setStatusMsg(
+        `💳 Tài xế ${payload.driver?.name || payload.driver?.phone || ''} vừa tạo phiếu VietQR ${payload.txCode} (${Number(payload.amount || 0).toLocaleString('vi-VN')}đ).`,
+      );
+      setFinanceRefreshKey((k) => k + 1);
+      loadData();
+    });
+    socket.on('admin:payment:proof_uploaded', (payload: any) => {
+      setStatusMsg(
+        `🧾 Tài xế ${payload.driver?.name || payload.driver?.phone || ''} vừa tải ảnh chuyển khoản cho phiếu ${payload.txCode} (${Number(payload.amount || 0).toLocaleString('vi-VN')}đ) — vào Đối soát để kiểm tra & duyệt!`,
+      );
+      setFinanceRefreshKey((k) => k + 1);
+      loadData();
+    });
+    socket.on('admin:sos:alert', (payload: any) => {
+      setStatusMsg(
+        `🆘 KHẨN CẤP SOS: ${payload.reporterRole === 'DRIVER' ? 'Tài xế' : 'Khách hàng'} ${payload.reporterName || payload.reporterPhone || ''} vừa phát tín hiệu SOS trên chuyến ${payload.trip?.code || ''}!`,
+      );
+      loadData();
+    });
+    socket.on('admin:trip:created', () => loadData());
+    socket.on('admin:trip:updated', () => loadData());
+    return () => {
+      socket.disconnect();
+    };
   }, [token]);
+
+  const handleResolveSos = async (sosId: string) => {
+    try {
+      await apiFetch(`/admin/sos-alerts/${sosId}/resolve`, { method: 'POST' });
+      setStatusMsg('Đã đánh dấu xử lý xong cảnh báo SOS.');
+      loadData();
+    } catch (e: any) {
+      setStatusMsg(e.message);
+    }
+  };
 
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -88,111 +153,98 @@ export default function App() {
     }
   };
 
-  const handleCreateManualTrip = async (e: React.FormEvent) => {
+  const handleQuickRange = (preset: 'today' | '7d' | 'month' | 'all') => {
+    const now = new Date();
+    const fmt = (d: Date) => d.toISOString().slice(0, 10);
+    if (preset === 'all') {
+      setDateFrom('');
+      setDateTo('');
+      loadData('', '');
+      return;
+    }
+    const to = fmt(now);
+    let from = to;
+    if (preset === '7d') {
+      const d = new Date(now);
+      d.setDate(d.getDate() - 6);
+      from = fmt(d);
+    } else if (preset === 'month') {
+      from = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-01`;
+    }
+    setDateFrom(from);
+    setDateTo(to);
+    loadData(from, to);
+  };
+
+  const handleSaveSettings = async (e: React.FormEvent) => {
     e.preventDefault();
     try {
-      await apiFetch('/admin/trips/manual', {
-        method: 'POST',
-        body: JSON.stringify({
-          customerPhone: manualForm.customerPhone,
-          customerName: manualForm.customerName || undefined,
-          pickupAddress: manualForm.pickupAddress,
-          pickupLat: parseFloat(manualForm.pickupLat),
-          pickupLng: parseFloat(manualForm.pickupLng),
-          dropoffAddress: manualForm.dropoffAddress || undefined,
-          dropoffLat: manualForm.dropoffLat ? parseFloat(manualForm.dropoffLat) : undefined,
-          dropoffLng: manualForm.dropoffLng ? parseFloat(manualForm.dropoffLng) : undefined,
-          note: manualForm.note || undefined,
-        }),
+      await apiFetch('/admin/settings', {
+        method: 'PATCH',
+        body: JSON.stringify(settings),
       });
-      setStatusMsg('Đã tạo đơn thủ công và đẩy vào hệ thống điều phối!');
-      setTab('trips');
+      setStatusMsg('Đã lưu cấu hình bảng giá & ghi nhật ký Audit Log.');
+      loadData();
+    } catch (err: any) {
+      setStatusMsg(`Lỗi cấu hình: ${err.message}`);
+    }
+  };
+
+  const handleRunMaintenanceCheck = async () => {
+    try {
+      await apiFetch('/admin/maintenance-fees/run-check', { method: 'POST' });
+      setStatusMsg('Đã chạy quét nhắc phí duy trì cho tất cả tài xế.');
       loadData();
     } catch (err: any) {
       setStatusMsg(err.message);
     }
   };
 
-  const handleDriverStatus = async (id: string, status: 'ACTIVE' | 'LOCKED') => {
-    await apiFetch(`/admin/drivers/${id}/status`, {
-      method: 'PATCH',
-      body: JSON.stringify({ status }),
-    });
-    loadData();
-  };
-
-  const handleTopup = async (driverId: string) => {
-    const raw = window.prompt('Nhập số tiền nạp vào ví (VNĐ):', '500000');
-    if (!raw) return;
-    const amount = parseInt(raw, 10);
-    const note = window.prompt('Ghi chú / Mã giao dịch ngân hàng:', 'Chuyển khoản nạp ví') || 'Nạp ví';
-    await apiFetch(`/admin/drivers/${driverId}/wallet/topup`, {
-      method: 'POST',
-      body: JSON.stringify({ amount, note }),
-    });
-    loadData();
-  };
-
-  const handleAdjustWallet = async (driverId: string) => {
-    const raw = window.prompt('Nhập số tiền điều chỉnh (+ hoặc -):', '0');
-    if (!raw) return;
-    const amount = parseInt(raw, 10);
-    const note = window.prompt('Bắt buộc nhập lý do điều chỉnh số dư:');
-    if (!note) return alert('Bắt buộc phải nhập lý do!');
-    await apiFetch(`/admin/drivers/${driverId}/wallet/adjust`, {
-      method: 'POST',
-      body: JSON.stringify({ amount, note }),
-    });
-    loadData();
-  };
-
-  const handleConfirmFee = async (driverId: string) => {
-    if (!window.confirm('Xác nhận tài xế đã đóng phí duy trì kỳ này?')) return;
-    await apiFetch(`/admin/drivers/${driverId}/maintenance-fee/confirm`, {
-      method: 'POST',
-      body: JSON.stringify({}),
-    });
-    loadData();
-  };
-
-  const handleSaveSettings = async (e: React.FormEvent) => {
-    e.preventDefault();
-    await apiFetch('/admin/settings', {
-      method: 'PATCH',
-      body: JSON.stringify(settings),
-    });
-    setStatusMsg('Đã lưu cấu hình & ghi nhật ký Audit Log.');
-    loadData();
-  };
-
   if (!token) {
     return (
-      <div className="min-h-screen flex items-center justify-center bg-slate-900 p-4">
-        <form onSubmit={handleLogin} className="bg-white rounded-2xl shadow-xl p-8 w-full max-w-md space-y-4">
-          <div className="flex items-center gap-2 text-indigo-600 font-bold text-xl">
-            <Car className="w-7 h-7" /> Lái Xe Hộ – Web Admin
+      <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-red-700 via-red-600 to-rose-700 p-4">
+        <form
+          onSubmit={handleLogin}
+          className="bg-white rounded-3xl shadow-2xl p-8 w-full max-w-md space-y-5 border border-red-100"
+        >
+          <div className="flex items-center gap-3.5">
+            <img
+              src="/logo-now-tn.png"
+              alt="NOW Thái Nguyên"
+              className="w-14 h-14 rounded-2xl shadow-md object-cover border border-red-100"
+            />
+            <div>
+              <div className="text-red-600 font-extrabold text-xl tracking-tight">NOW Thái Nguyên</div>
+              <div className="text-xs font-semibold text-slate-500 uppercase tracking-wider">
+                Quản trị Lái Xe Hộ
+              </div>
+            </div>
           </div>
-          <p className="text-sm text-slate-500">Đăng nhập hệ thống quản trị & điều phối</p>
-          {loginErr && <div className="p-3 bg-red-50 text-red-700 text-sm rounded-lg">{loginErr}</div>}
+          <p className="text-sm text-slate-500">Đăng nhập hệ thống điều phối, tài chính & đối soát ví</p>
+          {loginErr && (
+            <div className="p-3 bg-red-50 border border-red-200 text-red-700 text-sm rounded-xl">
+              {loginErr}
+            </div>
+          )}
           <div>
-            <label className="block text-sm font-medium mb-1">Tài khoản</label>
+            <label className="block text-sm font-semibold text-slate-700 mb-1">Tài khoản</label>
             <input
-              className="w-full border rounded-lg px-3 py-2"
+              className="w-full border border-slate-200 rounded-xl px-3.5 py-2.5 text-sm focus:ring-2 focus:ring-red-200 focus:border-red-500 outline-none"
               value={username}
               onChange={(e) => setUsername(e.target.value)}
             />
           </div>
           <div>
-            <label className="block text-sm font-medium mb-1">Mật khẩu</label>
+            <label className="block text-sm font-semibold text-slate-700 mb-1">Mật khẩu</label>
             <input
               type="password"
-              className="w-full border rounded-lg px-3 py-2"
+              className="w-full border border-slate-200 rounded-xl px-3.5 py-2.5 text-sm focus:ring-2 focus:ring-red-200 focus:border-red-500 outline-none"
               value={password}
               onChange={(e) => setPassword(e.target.value)}
             />
           </div>
-          <button className="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-semibold py-2.5 rounded-lg">
-            Đăng nhập
+          <button className="w-full bg-red-600 hover:bg-red-700 text-white font-bold py-3 rounded-xl shadow-md shadow-red-200 transition">
+            Đăng nhập hệ thống
           </button>
         </form>
       </div>
@@ -200,17 +252,32 @@ export default function App() {
   }
 
   return (
-    <div className="min-h-screen flex">
-      {/* Sidebar */}
-      <aside className="w-64 bg-slate-900 text-slate-200 flex flex-col p-4 space-y-2">
-        <div className="flex items-center gap-2 text-white font-bold text-lg px-2 py-3 border-b border-slate-800">
-          <Car className="w-6 h-6 text-indigo-400" /> Lái Xe Hộ Admin
+    <div className="min-h-screen flex bg-slate-50">
+      <aside className="w-64 bg-white text-slate-700 border-r border-slate-200 flex flex-col p-4 space-y-1.5 shrink-0 sticky top-0 h-screen shadow-sm">
+        <div className="flex items-center justify-between px-2 py-3 mb-2 border-b border-slate-100">
+          <div className="flex items-center gap-2.5">
+            <img
+              src="/logo-now-tn.png"
+              alt="NOW Thái Nguyên"
+              className="w-10 h-10 rounded-xl shadow-sm object-cover"
+            />
+            <div>
+              <div className="text-red-600 font-extrabold text-sm leading-tight">NOW Thái Nguyên</div>
+              <div className="text-[11px] font-medium text-slate-400">Lái Xe Hộ Admin</div>
+            </div>
+          </div>
+          <span
+            title={wsConnected ? 'Kết nối Realtime đang hoạt động' : 'Mất kết nối Realtime'}
+            className={`w-2.5 h-2.5 rounded-full ${wsConnected ? 'bg-emerald-500' : 'bg-red-500'}`}
+          />
         </div>
         {[
           { id: 'dashboard', label: 'Thống kê tổng quan', icon: BarChart3 },
           { id: 'manual', label: 'Tạo đơn thủ công', icon: PlusCircle },
-          { id: 'trips', label: 'Quản lý chuyến đi', icon: Car },
-          { id: 'drivers', label: 'Tài xế, Ví & Phí', icon: Wallet },
+          { id: 'trips', label: 'Quản lý chuyến đi', icon: Car, badge: stats?.noDriverCount },
+          { id: 'finance', label: 'Đối soát Ví & VietQR', icon: Landmark, badge: stats?.pendingPaymentCount },
+          { id: 'drivers', label: 'Tài xế, Ví & Phí', icon: Wallet, badge: stats?.pendingDrivers },
+          { id: 'partners', label: 'Đối tác Quán / CTV', icon: Store },
           { id: 'customers', label: 'Khách hàng', icon: Users },
           { id: 'settings', label: 'Cấu hình & Nhật ký', icon: SettingsIcon },
         ].map((item) => {
@@ -218,290 +285,180 @@ export default function App() {
           return (
             <button
               key={item.id}
-              onClick={() => setTab(item.id as Tab)}
-              className={`flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition ${
-                tab === item.id ? 'bg-indigo-600 text-white' : 'hover:bg-slate-800'
+              onClick={() => {
+                if (item.id === 'trips') setTripsInitialFilter('ALL');
+                setTab(item.id as Tab);
+              }}
+              className={`flex items-center justify-between px-3 py-2.5 rounded-xl text-sm font-semibold transition ${
+                tab === item.id
+                  ? 'bg-red-600 text-white shadow-sm shadow-red-200'
+                  : 'text-slate-600 hover:bg-red-50 hover:text-red-700'
               }`}
             >
-              <Icon className="w-4 h-4" /> {item.label}
+              <span className="flex items-center gap-3">
+                <Icon className="w-4 h-4" /> {item.label}
+              </span>
+              {item.badge ? (
+                <span
+                  className={`px-2 py-0.5 text-xs rounded-full font-bold ${
+                    tab === item.id ? 'bg-white text-red-600' : 'bg-amber-400 text-slate-950'
+                  }`}
+                >
+                  {item.badge}
+                </span>
+              ) : null}
             </button>
           );
         })}
         <div className="flex-1" />
         <button
+          onClick={() => loadData()}
+          className="flex items-center gap-2 px-3 py-2 text-sm text-slate-600 hover:bg-slate-100 rounded-xl font-medium"
+        >
+          <RefreshCw className="w-4 h-4" /> Làm mới dữ liệu
+        </button>
+        <button
           onClick={() => {
             setToken(null);
             setAuthToken(null);
           }}
-          className="flex items-center gap-2 px-3 py-2 text-sm text-red-400 hover:bg-slate-800 rounded-lg"
+          className="flex items-center gap-2 px-3 py-2 text-sm text-red-600 hover:bg-red-50 rounded-xl font-semibold"
         >
           <LogOut className="w-4 h-4" /> Đăng xuất
         </button>
       </aside>
 
-      {/* Main Content */}
       <main className="flex-1 p-6 overflow-y-auto">
-        {statusMsg && (
-          <div className="mb-4 p-3 bg-indigo-50 border border-indigo-200 text-indigo-800 rounded-lg flex justify-between items-center text-sm">
-            <span>{statusMsg}</span>
-            <button onClick={() => setStatusMsg('')} className="font-bold">×</button>
+        {sosAlerts.length > 0 && (
+          <div className="mb-4 p-4 bg-red-600 text-white rounded-2xl shadow-lg border-2 border-red-300 space-y-2.5">
+            <div className="flex items-center justify-between gap-2">
+              <div className="flex items-center gap-2 font-extrabold text-sm tracking-wide">
+                <AlertOctagon className="w-5 h-5 animate-pulse" />
+                CẢNH BÁO SOS KHẨN CẤP ({sosAlerts.length}) — CẦN GỌI HỖ TRỢ NGAY
+              </div>
+            </div>
+            <div className="space-y-2">
+              {sosAlerts.map((sos) => (
+                <div
+                  key={sos.id}
+                  className="bg-white/15 backdrop-blur rounded-xl p-3 flex flex-wrap items-center justify-between gap-3 text-xs"
+                >
+                  <div className="space-y-0.5">
+                    <div className="font-bold text-sm">
+                      Chuyến {sos.trip?.code || '—'} ·{' '}
+                      {sos.reporterRole === 'DRIVER' ? 'Tài xế' : 'Khách hàng'}:{' '}
+                      {sos.reporterName || '—'} ({sos.reporterPhone || '—'})
+                    </div>
+                    <div className="text-red-100">
+                      Thời gian: {fmtDateTime(sos.createdAt)}
+                      {sos.note ? ` · Ghi chú: ${sos.note}` : ''}
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    {sos.lat != null && sos.lng != null && (
+                      <a
+                        href={`https://www.google.com/maps?q=${sos.lat},${sos.lng}`}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="px-3 py-1.5 bg-white text-red-700 font-bold rounded-lg flex items-center gap-1 hover:bg-red-50"
+                      >
+                        <ExternalLink className="w-3.5 h-3.5" /> Mở GPS
+                      </a>
+                    )}
+                    <button
+                      onClick={() => handleResolveSos(sos.id)}
+                      className="px-3 py-1.5 bg-emerald-500 hover:bg-emerald-600 text-white font-bold rounded-lg flex items-center gap-1"
+                    >
+                      <CheckCircle2 className="w-3.5 h-3.5" /> Đã xử lý
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
           </div>
         )}
 
-        {tab === 'dashboard' && stats && (
-          <div className="space-y-6">
-            <h1 className="text-2xl font-bold">Thống kê hệ thống</h1>
-            <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-              <StatCard title="Tổng số chuyến" value={stats.totalTrips} sub={`Hoàn thành: ${stats.completedTrips}`} />
-              <StatCard title="Tổng tiền chuyến" value={fmtMoney(stats.totalRevenue)} sub="Chuyến hoàn thành" />
-              <StatCard title="Tổng chiết khấu" value={fmtMoney(stats.totalCommission)} sub="Đã trừ ví tài xế" />
-              <StatCard title="Phí duy trì đã thu" value={fmtMoney(stats.totalMaintenanceCollected)} sub={`Quá hạn: ${stats.overdueFees}`} />
-            </div>
-            {stats.noDriverCount > 0 && (
-              <div className="p-4 bg-amber-50 border border-amber-300 rounded-xl flex items-center justify-between">
-                <div className="flex items-center gap-3 text-amber-800">
-                  <AlertTriangle className="w-5 h-5" />
-                  <span>Có <b>{stats.noDriverCount}</b> đơn chưa tìm được tài xế (NO_DRIVER) cần Admin xử lý.</span>
-                </div>
-                <button
-                  onClick={() => setTab('trips')}
-                  className="px-3 py-1.5 bg-amber-600 text-white text-sm rounded-lg"
-                >
-                  Xem đơn ngay
-                </button>
-              </div>
-            )}
+        {statusMsg && (
+          <div className="mb-4 p-3.5 bg-red-50 border border-red-200 text-red-900 rounded-xl flex justify-between items-center text-sm font-medium">
+            <span>{statusMsg}</span>
+            <button onClick={() => setStatusMsg('')} className="font-bold px-2 text-red-700">
+              ×
+            </button>
           </div>
+        )}
+
+        {tab === 'dashboard' && (
+          <DashboardTab
+            stats={stats}
+            dateFrom={dateFrom}
+            dateTo={dateTo}
+            onChangeRange={(f, t) => {
+              setDateFrom(f);
+              setDateTo(t);
+              loadData(f, t);
+            }}
+            onQuickRange={handleQuickRange}
+            onGoToTrips={() => {
+              setTripsInitialFilter('NO_DRIVER');
+              setTab('trips');
+            }}
+            onGoToDrivers={() => setTab('drivers')}
+            onGoToFinance={() => setTab('finance')}
+            onRunMaintenanceCheck={handleRunMaintenanceCheck}
+          />
         )}
 
         {tab === 'manual' && (
-          <div className="max-w-2xl bg-white p-6 rounded-xl shadow-sm border space-y-4">
-            <h1 className="text-xl font-bold">Tạo đơn thủ công (Khách gọi tổng đài)</h1>
-            <form onSubmit={handleCreateManualTrip} className="space-y-4">
-              <div className="grid grid-cols-2 gap-4">
-                <Input label="Số điện thoại khách *" value={manualForm.customerPhone} onChange={(v) => setManualForm({ ...manualForm, customerPhone: v })} required />
-                <Input label="Tên khách hàng" value={manualForm.customerName} onChange={(v) => setManualForm({ ...manualForm, customerName: v })} />
-              </div>
-              <Input label="Địa chỉ đón *" value={manualForm.pickupAddress} onChange={(v) => setManualForm({ ...manualForm, pickupAddress: v })} required />
-              <div className="grid grid-cols-2 gap-4">
-                <Input label="Vĩ độ đón (pickupLat)" value={manualForm.pickupLat} onChange={(v) => setManualForm({ ...manualForm, pickupLat: v })} required />
-                <Input label="Kinh độ đón (pickupLng)" value={manualForm.pickupLng} onChange={(v) => setManualForm({ ...manualForm, pickupLng: v })} required />
-              </div>
-              <Input label="Địa chỉ trả (tùy chọn)" value={manualForm.dropoffAddress} onChange={(v) => setManualForm({ ...manualForm, dropoffAddress: v })} />
-              <div className="grid grid-cols-2 gap-4">
-                <Input label="Vĩ độ trả" value={manualForm.dropoffLat} onChange={(v) => setManualForm({ ...manualForm, dropoffLat: v })} />
-                <Input label="Kinh độ trả" value={manualForm.dropoffLng} onChange={(v) => setManualForm({ ...manualForm, dropoffLng: v })} />
-              </div>
-              <Input label="Ghi chú" value={manualForm.note} onChange={(v) => setManualForm({ ...manualForm, note: v })} />
-              <button className="px-5 py-2.5 bg-indigo-600 text-white rounded-lg font-medium hover:bg-indigo-700">
-                Tạo đơn & Tìm tài xế tự động
-              </button>
-            </form>
-          </div>
+          <ManualTripTab
+            onCreated={(msg) => {
+              setStatusMsg(msg);
+              setTripsInitialFilter('ALL');
+              setTab('trips');
+              loadData();
+            }}
+            onError={(msg) => setStatusMsg(msg)}
+          />
         )}
 
         {tab === 'trips' && (
-          <div className="space-y-4">
-            <h1 className="text-2xl font-bold">Danh sách chuyến đi</h1>
-            <div className="bg-white rounded-xl shadow-sm border overflow-x-auto">
-              <table className="w-full text-sm text-left">
-                <thead className="bg-slate-100 text-slate-600">
-                  <tr>
-                    <th className="p-3">Mã chuyến</th>
-                    <th className="p-3">Khách hàng</th>
-                    <th className="p-3">Tài xế</th>
-                    <th className="p-3">Điểm đón → Điểm trả</th>
-                    <th className="p-3">Giá / Chiết khấu</th>
-                    <th className="p-3">Trạng thái</th>
-                    <th className="p-3">Chi tiết</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y">
-                  {trips.map((t) => (
-                    <tr key={t.id} className="hover:bg-slate-50">
-                      <td className="p-3 font-mono font-semibold">{t.code}</td>
-                      <td className="p-3">{t.customer?.phone}<br /><span className="text-xs text-slate-500">{t.customer?.name}</span></td>
-                      <td className="p-3">{t.driver ? `${t.driver.name || ''} (${t.driver.phone})` : '—'}</td>
-                      <td className="p-3 max-w-xs truncate">{t.pickupAddress} → {t.dropoffAddress || 'Chưa nhập'}</td>
-                      <td className="p-3">{fmtMoney(t.finalPrice ?? t.estimatedPrice)}<br /><span className="text-xs text-slate-500">CK: {fmtMoney(t.commissionAmount)}</span></td>
-                      <td className="p-3"><span className="px-2 py-1 rounded-full text-xs font-medium bg-slate-100">{t.status}</span></td>
-                      <td className="p-3">
-                        <button onClick={() => setSelectedTrip(t)} className="text-indigo-600 hover:underline">Xem ảnh/video</button>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
+          <TripsTab
+            key={tripsInitialFilter}
+            trips={trips}
+            drivers={drivers}
+            initialFilter={tripsInitialFilter}
+            publicTrackBaseUrl={settings.public_track_base_url || 'https://tuannv.site'}
+            onReload={() => loadData()}
+            onNotify={(msg) => setStatusMsg(msg)}
+          />
+        )}
 
-            {selectedTrip && (
-              <div className="fixed inset-0 bg-black/50 flex items-center justify-center p-4 z-50">
-                <div className="bg-white rounded-2xl max-w-2xl w-full p-6 space-y-4 max-h-[85vh] overflow-y-auto">
-                  <div className="flex justify-between items-center">
-                    <h2 className="text-lg font-bold">Chi tiết chuyến {selectedTrip.code}</h2>
-                    <button onClick={() => setSelectedTrip(null)} className="text-xl font-bold">×</button>
-                  </div>
-                  <p className="text-sm"><b>Đón:</b> {selectedTrip.pickupAddress}</p>
-                  <p className="text-sm"><b>Trả:</b> {selectedTrip.dropoffAddress || '—'}</p>
-                  <p className="text-sm"><b>Quãng đường:</b> {selectedTrip.distanceKm ?? '—'} km | <b>Khung giờ:</b> {selectedTrip.timeSlot}</p>
-                  <div>
-                    <h3 className="font-semibold text-sm mb-2">Ảnh & Video nhận/trả xe ({selectedTrip.media?.length || 0})</h3>
-                    <div className="grid grid-cols-2 gap-3">
-                      {selectedTrip.media?.map((m: any) => (
-                        <div key={m.id} className="border rounded-lg p-2 text-xs space-y-1">
-                          <div className="font-semibold">{m.stage} – {m.type} {m.isPlatePhoto ? '(Biển số)' : ''}</div>
-                          <a href={m.url} target="_blank" rel="noreferrer" className="text-indigo-600 break-all underline">{m.url}</a>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                </div>
-              </div>
-            )}
-          </div>
+        {tab === 'finance' && (
+          <FinanceTab
+            refreshKey={financeRefreshKey}
+            onNotify={(msg) => setStatusMsg(msg)}
+            onAfterConfirm={() => loadData()}
+          />
         )}
 
         {tab === 'drivers' && (
-          <div className="space-y-4">
-            <h1 className="text-2xl font-bold">Quản lý Tài xế, Ví & Phí duy trì</h1>
-            <div className="bg-white rounded-xl shadow-sm border overflow-x-auto">
-              <table className="w-full text-sm text-left">
-                <thead className="bg-slate-100 text-slate-600">
-                  <tr>
-                    <th className="p-3">Tài xế</th>
-                    <th className="p-3">Trạng thái</th>
-                    <th className="p-3">Số dư ví</th>
-                    <th className="p-3">Hạn phí duy trì</th>
-                    <th className="p-3">Hành động</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y">
-                  {drivers.map((d) => (
-                    <tr key={d.id}>
-                      <td className="p-3 font-medium">{d.name || 'Chưa cập nhật'}<br /><span className="text-xs text-slate-500">{d.phone}</span></td>
-                      <td className="p-3">
-                        <span className="px-2 py-1 rounded text-xs font-semibold bg-slate-100">{d.status}</span>
-                        {d.isOnline && <span className="ml-1 text-xs text-emerald-600">● Online</span>}
-                      </td>
-                      <td className="p-3 font-semibold">{fmtMoney(d.wallet?.balance ?? 0)}</td>
-                      <td className="p-3 text-xs">{d.feeDueDate ? new Date(d.feeDueDate).toLocaleDateString('vi-VN') : 'Chưa kích hoạt'}</td>
-                      <td className="p-3 flex flex-wrap gap-2">
-                        {d.status !== 'ACTIVE' ? (
-                          <button onClick={() => handleDriverStatus(d.id, 'ACTIVE')} className="px-2 py-1 bg-emerald-600 text-white rounded text-xs flex items-center gap-1">
-                            <CheckCircle2 className="w-3 h-3" /> Duyệt / Mở
-                          </button>
-                        ) : (
-                          <button onClick={() => handleDriverStatus(d.id, 'LOCKED')} className="px-2 py-1 bg-red-600 text-white rounded text-xs flex items-center gap-1">
-                            <Lock className="w-3 h-3" /> Khóa
-                          </button>
-                        )}
-                        <button onClick={() => handleTopup(d.id)} className="px-2 py-1 bg-indigo-600 text-white rounded text-xs">+ Nạp ví</button>
-                        <button onClick={() => handleAdjustWallet(d.id)} className="px-2 py-1 bg-slate-700 text-white rounded text-xs">Điều chỉnh ví</button>
-                        <button onClick={() => handleConfirmFee(d.id)} className="px-2 py-1 bg-amber-600 text-white rounded text-xs">Đóng phí 200k</button>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          </div>
+          <DriversTab drivers={drivers} onReload={() => loadData()} onNotify={(msg) => setStatusMsg(msg)} />
         )}
 
-        {tab === 'customers' && (
-          <div className="space-y-4">
-            <h1 className="text-2xl font-bold">Danh sách Khách hàng</h1>
-            <div className="bg-white rounded-xl shadow-sm border overflow-x-auto">
-              <table className="w-full text-sm text-left">
-                <thead className="bg-slate-100 text-slate-600">
-                  <tr>
-                    <th className="p-3">Số điện thoại</th>
-                    <th className="p-3">Họ tên</th>
-                    <th className="p-3">Số chuyến đã đặt</th>
-                    <th className="p-3">Ngày tạo</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y">
-                  {customers.map((c) => (
-                    <tr key={c.id}>
-                      <td className="p-3 font-medium">{c.phone}</td>
-                      <td className="p-3">{c.name || '—'}</td>
-                      <td className="p-3">{c._count?.trips ?? 0}</td>
-                      <td className="p-3 text-xs">{new Date(c.createdAt).toLocaleString('vi-VN')}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          </div>
+        {tab === 'partners' && (
+          <PartnersTab partners={partners} onReload={() => loadData()} onNotify={(msg) => setStatusMsg(msg)} />
         )}
+
+        {tab === 'customers' && <CustomersTab customers={customers} />}
 
         {tab === 'settings' && (
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-            <form onSubmit={handleSaveSettings} className="bg-white p-6 rounded-xl shadow-sm border space-y-3">
-              <h1 className="text-xl font-bold mb-2">Cấu hình Bảng giá & Điều phối</h1>
-              {Object.entries(settings).map(([k, v]) => (
-                <div key={k} className="grid grid-cols-2 items-center gap-2 text-sm">
-                  <label className="font-mono text-slate-600">{k}</label>
-                  <input
-                    className="border rounded px-2.5 py-1.5"
-                    value={v}
-                    onChange={(e) => setSettings({ ...settings, [k]: e.target.value })}
-                  />
-                </div>
-              ))}
-              <button className="mt-4 px-5 py-2 bg-indigo-600 text-white rounded-lg font-medium">
-                Lưu cấu hình
-              </button>
-            </form>
-
-            <div className="bg-white p-6 rounded-xl shadow-sm border space-y-3">
-              <h2 className="text-xl font-bold flex items-center gap-2"><History className="w-5 h-5" /> Nhật ký thao tác (Audit Logs)</h2>
-              <div className="space-y-2 max-h-[500px] overflow-y-auto text-xs">
-                {auditLogs.map((log) => (
-                  <div key={log.id} className="p-3 bg-slate-50 rounded-lg border">
-                    <div className="font-semibold">{log.action} – {log.admin?.name}</div>
-                    <div className="text-slate-500">{new Date(log.createdAt).toLocaleString('vi-VN')}</div>
-                  </div>
-                ))}
-              </div>
-            </div>
-          </div>
+          <SettingsTab
+            settings={settings}
+            auditLogs={auditLogs}
+            onChange={setSettings}
+            onSave={handleSaveSettings}
+          />
         )}
       </main>
-    </div>
-  );
-}
-
-function StatCard({ title, value, sub }: { title: string; value: string | number; sub: string }) {
-  return (
-    <div className="bg-white p-5 rounded-xl shadow-sm border">
-      <div className="text-sm text-slate-500">{title}</div>
-      <div className="text-2xl font-bold mt-1">{value}</div>
-      <div className="text-xs text-slate-400 mt-1">{sub}</div>
-    </div>
-  );
-}
-
-function Input({
-  label,
-  value,
-  onChange,
-  required,
-}: {
-  label: string;
-  value: string;
-  onChange: (v: string) => void;
-  required?: boolean;
-}) {
-  return (
-    <div>
-      <label className="block text-sm font-medium mb-1">{label}</label>
-      <input
-        className="w-full border rounded-lg px-3 py-2 text-sm"
-        value={value}
-        onChange={(e) => onChange(e.target.value)}
-        required={required}
-      />
     </div>
   );
 }
