@@ -41,7 +41,7 @@ const SETTING_GROUPS: Array<{
       { key: 'bank_account', label: 'Số tài khoản nhận tiền' },
       { key: 'bank_owner', label: 'Tên chủ tài khoản (IN HOA không dấu)' },
       { key: 'hotline', label: 'Hotline Tổng đài / Hỗ trợ SOS' },
-      { key: 'public_track_base_url', label: 'Tên miền công khai chia sẻ hành trình (vd: https://tuannv.site)' },
+      { key: 'public_track_base_url', label: 'Tên miền công khai chia sẻ hành trình (vd: https://now.tuannv.site)' },
       { key: 'bank_info', label: 'Mô tả tài khoản hiển thị trên App' },
     ],
   },

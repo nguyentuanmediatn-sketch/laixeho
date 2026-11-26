@@ -426,7 +426,7 @@ export default function App() {
             trips={trips}
             drivers={drivers}
             initialFilter={tripsInitialFilter}
-            publicTrackBaseUrl={settings.public_track_base_url || 'https://tuannv.site'}
+            publicTrackBaseUrl={settings.public_track_base_url || 'https://now.tuannv.site'}
             onReload={() => loadData()}
             onNotify={(msg) => setStatusMsg(msg)}
           />

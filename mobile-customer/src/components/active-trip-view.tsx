@@ -31,7 +31,7 @@ const STEPS = ['SEARCHING', 'ACCEPTED', 'ARRIVED', 'IN_PROGRESS', 'COMPLETED'];
 export function ActiveTripView({
   trip,
   dispatchRingInfo = null,
-  publicTrackBaseUrl = 'https://tuannv.site',
+  publicTrackBaseUrl = 'https://now.tuannv.site',
   hotline = '0973521456',
   onUpdated,
   onResetNewTrip,

@@ -26,7 +26,7 @@ export const DEFAULT_SETTINGS: Record<string, string> = {
   bank_account: '0973521456',
   bank_owner: 'NGUYEN VAN TUAN',
   hotline: '0973521456',
-  public_track_base_url: 'https://tuannv.site',
+  public_track_base_url: 'https://now.tuannv.site',
   bank_info: 'Ngân hàng: MB Bank | STK: 0973521456 | Chủ TK: NGUYEN VAN TUAN',
 };
 

@@ -139,7 +139,7 @@ export class TripsController {
     });
     const map = Object.fromEntries(rows.map((r) => [r.key, r.value]));
     return {
-      publicTrackBaseUrl: (map.public_track_base_url || 'https://tuannv.site').replace(/\/+$/, ''),
+      publicTrackBaseUrl: (map.public_track_base_url || 'https://now.tuannv.site').replace(/\/+$/, ''),
       hotline: map.hotline || '0973521456',
     };
   }

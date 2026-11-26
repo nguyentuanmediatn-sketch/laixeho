@@ -36,7 +36,7 @@ function CustomerAppContent() {
   const [activeTrip, setActiveTrip] = useState<any>(null);
   const [dispatchRingInfo, setDispatchRingInfo] = useState<{ ring: number; radiusKm: number } | null>(null);
   const [publicConfig, setPublicConfig] = useState<{ publicTrackBaseUrl: string; hotline: string }>({
-    publicTrackBaseUrl: 'https://tuannv.site',
+    publicTrackBaseUrl: 'https://now.tuannv.site',
     hotline: '0973521456',
   });
   const [history, setHistory] = useState<any[]>([]);

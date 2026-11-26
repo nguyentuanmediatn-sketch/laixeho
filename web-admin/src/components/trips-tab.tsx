@@ -28,7 +28,7 @@ export function TripsTab({
   trips,
   drivers = [],
   initialFilter = 'ALL',
-  publicTrackBaseUrl = 'https://tuannv.site',
+  publicTrackBaseUrl = 'https://now.tuannv.site',
   onReload,
   onNotify,
 }: {
