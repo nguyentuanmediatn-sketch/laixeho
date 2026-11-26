@@ -38,6 +38,7 @@ import {
 import {
   initDriverNotifications,
   playShortChime,
+  registerDriverFcmToken,
   showLocalTripNotification,
   startTripRingtone,
   stopTripRingtone,
@@ -233,6 +234,12 @@ function DriverAppContent() {
       syncActiveTripAndOffer(true);
     }).then((cleanup) => {
       unsubNotif = cleanup;
+      registerDriverFcmToken((fcmToken) =>
+        driverApi('/auth/fcm-token', {
+          method: 'POST',
+          body: JSON.stringify({ fcmToken }),
+        }).catch(() => undefined),
+      );
     });
 
     const socket = io(`${getApiBase()}/ws`, {

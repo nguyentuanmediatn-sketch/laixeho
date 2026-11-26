@@ -27,6 +27,7 @@ interface AudienceStats {
   totalAll: number;
   customerPushReady: number;
   driverPushReady: number;
+  fcmConfigured?: boolean;
 }
 
 const TARGET_META: Record<Target, { label: string; short: string; color: string }> = {
@@ -220,6 +221,32 @@ export function BroadcastsTab({ onNotify }: { onNotify: (msg: string) => void })
           <RefreshCw className={`w-3.5 h-3.5 ${loading ? 'animate-spin' : ''}`} /> Làm mới thống kê
         </button>
       </div>
+
+      {/* Trạng thái Firebase FCM đẩy xuyên màn hình khóa */}
+      {stats && (
+        <div
+          className={`rounded-xl border px-4 py-2.5 text-xs flex flex-wrap items-center justify-between gap-2 ${
+            stats.fcmConfigured
+              ? 'bg-emerald-50 border-emerald-200 text-emerald-900'
+              : 'bg-amber-50 border-amber-200 text-amber-900'
+          }`}
+        >
+          <div className="font-semibold">
+            {stats.fcmConfigured ? (
+              <>
+                🟢 <b>Firebase FCM đã kích hoạt:</b> Gửi thông báo xuyên màn hình khóa kể cả khi khách/tài xế đã tắt hẳn app.
+              </>
+            ) : (
+              <>
+                🟡 <b>Chưa gắn Firebase Service Account:</b> Hiện gửi tức thì qua Realtime khi mở app + tự hiện Popup lần mở sau. Gắn file <code className="px-1 py-0.5 bg-white/80 rounded">google-services.json</code> &amp; <code className="px-1 py-0.5 bg-white/80 rounded">firebase-service-account.json</code> để bật đẩy xuyên màn hình khóa.
+              </>
+            )}
+          </div>
+          <div className="text-[11px] font-bold">
+            Thiết bị đã gắn Push Token: {stats.customerPushReady} KH · {stats.driverPushReady} TX
+          </div>
+        </div>
+      )}
 
       {/* Chọn nhanh nhóm đối tượng + số lượng thực tế */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3.5">

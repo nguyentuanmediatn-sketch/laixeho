@@ -12,6 +12,11 @@ build/
 .env
 .env.local
 .env.*.local
+keystore/
+*.keystore
+*.jks
+google-services.json
+firebase-service-account.json
 
 # Logs & OS
 *.log

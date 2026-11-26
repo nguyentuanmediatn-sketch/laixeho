@@ -134,6 +134,21 @@ export async function playShortChime(): Promise<void> {
   }
 }
 
+export async function registerDriverFcmToken(
+  onToken: (token: string) => Promise<void>,
+): Promise<void> {
+  try {
+    const perm = await Notifications.getPermissionsAsync();
+    if (perm.status !== 'granted') return;
+    const dev = await Notifications.getDevicePushTokenAsync();
+    if (dev?.data && typeof dev.data === 'string') {
+      await onToken(dev.data);
+    }
+  } catch {
+    // Bản build chưa gắn google-services.json — bỏ qua êm
+  }
+}
+
 export async function showLocalTripNotification(params: {
   title: string;
   body: string;

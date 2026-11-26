@@ -1,5 +1,9 @@
-import { BadRequestException, Injectable, Logger, NotFoundException } from '@nestjs/common';
+import { BadRequestException, Injectable, Logger, NotFoundException, OnModuleInit } from '@nestjs/common';
 import { randomUUID } from 'crypto';
+import * as fs from 'fs';
+import * as path from 'path';
+import { cert, getApps, initializeApp } from 'firebase-admin/app';
+import { getMessaging } from 'firebase-admin/messaging';
 import { DriverStatus, Prisma, UserType } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { RealtimeGateway } from '../realtime/realtime.gateway';
@@ -17,13 +21,66 @@ export interface SendBroadcastInput {
 }
 
 @Injectable()
-export class NotificationsService {
+export class NotificationsService implements OnModuleInit {
   private readonly logger = new Logger(NotificationsService.name);
+  private fcmReady = false;
 
   constructor(
     private readonly prisma: PrismaService,
     private readonly realtime: RealtimeGateway,
   ) {}
+
+  onModuleInit() {
+    this.initFirebaseAdmin();
+  }
+
+  private initFirebaseAdmin() {
+    if (getApps().length > 0) {
+      this.fcmReady = true;
+      return;
+    }
+
+    try {
+      let serviceAccount: any = null;
+
+      if (process.env.FIREBASE_SERVICE_ACCOUNT_JSON) {
+        const raw = process.env.FIREBASE_SERVICE_ACCOUNT_JSON.trim();
+        const jsonStr = raw.startsWith('{') ? raw : Buffer.from(raw, 'base64').toString('utf8');
+        serviceAccount = JSON.parse(jsonStr);
+      } else {
+        const candidates = [
+          process.env.FIREBASE_SERVICE_ACCOUNT_PATH,
+          path.resolve(process.cwd(), 'firebase-service-account.json'),
+          '/home/tuannv/laixeho-secrets/firebase-service-account.json',
+        ].filter((p): p is string => Boolean(p));
+
+        for (const candidate of candidates) {
+          if (fs.existsSync(candidate)) {
+            serviceAccount = JSON.parse(fs.readFileSync(candidate, 'utf8'));
+            this.logger.log(`Loaded Firebase Admin credentials from ${candidate}`);
+            break;
+          }
+        }
+      }
+
+      if (serviceAccount?.project_id && serviceAccount?.private_key && serviceAccount?.client_email) {
+        initializeApp({
+          credential: cert(serviceAccount),
+        });
+        this.fcmReady = true;
+        this.logger.log(`Firebase Cloud Messaging (FCM v1) initialized for project: ${serviceAccount.project_id}`);
+      } else {
+        this.logger.log('Firebase FCM service account not configured yet — using Realtime Socket.IO + in-app popups.');
+      }
+    } catch (err: any) {
+      this.logger.warn(`Firebase Admin init skipped: ${err.message}`);
+      this.fcmReady = false;
+    }
+  }
+
+  isFcmConfigured(): boolean {
+    return this.fcmReady;
+  }
 
   async sendToUser(
     userType: UserType,
@@ -75,6 +132,7 @@ export class NotificationsService {
       totalAll: allCustomers + allDrivers,
       customerPushReady,
       driverPushReady,
+      fcmConfigured: this.fcmReady,
     };
   }
 
@@ -178,7 +236,6 @@ export class NotificationsService {
       });
     }
 
-    // Lưu hàng loạt theo lô 500 bản ghi để tối ưu tốc độ DB
     const BATCH_SIZE = 500;
     for (let i = 0; i < recordsToInsert.length; i += BATCH_SIZE) {
       await this.prisma.notification.createMany({
@@ -203,7 +260,7 @@ export class NotificationsService {
       },
     });
 
-    // Bắn realtime qua Socket.IO đến từng user đang online kèm đúng ID bản ghi để đánh dấu đã đọc
+    // Bắn realtime qua Socket.IO đến từng user đang online kèm đúng ID bản ghi
     for (const rec of recordsToInsert) {
       const wireRecord = { ...rec, readAt: null };
       if (rec.userType === UserType.CUSTOMER) {
@@ -213,15 +270,32 @@ export class NotificationsService {
       }
     }
 
-    // Gửi thêm Expo Push cho các máy đã đăng ký Expo Push Token (nếu có)
-    const expoTokens = [
-      ...customers.map((c) => c.fcmToken),
-      ...drivers.map((d) => d.fcmToken),
-    ].filter(
-      (t): t is string =>
-        Boolean(t) && (t!.startsWith('ExponentPushToken[') || t!.startsWith('ExpoPushToken[')),
-    );
+    // Phân loại Expo Push Token vs Native Firebase FCM Token để đẩy xuyên màn hình khóa
+    const customerFcmTokens: string[] = [];
+    const driverFcmTokens: string[] = [];
+    const expoTokens: string[] = [];
 
+    for (const c of customers) {
+      if (!c.fcmToken) continue;
+      if (this.isExpoToken(c.fcmToken)) expoTokens.push(c.fcmToken);
+      else customerFcmTokens.push(c.fcmToken);
+    }
+    for (const d of drivers) {
+      if (!d.fcmToken) continue;
+      if (this.isExpoToken(d.fcmToken)) expoTokens.push(d.fcmToken);
+      else driverFcmTokens.push(d.fcmToken);
+    }
+
+    if (this.fcmReady && customerFcmTokens.length > 0) {
+      this.dispatchFcmBatch(UserType.CUSTOMER, customerFcmTokens, title, body, payloadData).catch((err) =>
+        this.logger.warn(`Customer FCM batch failed: ${err.message}`),
+      );
+    }
+    if (this.fcmReady && driverFcmTokens.length > 0) {
+      this.dispatchFcmBatch(UserType.DRIVER, driverFcmTokens, title, body, payloadData).catch((err) =>
+        this.logger.warn(`Driver FCM batch failed: ${err.message}`),
+      );
+    }
     if (expoTokens.length > 0) {
       this.dispatchExpoPushBatch(expoTokens, title, body, payloadData).catch((err) =>
         this.logger.warn(`Batch Expo push failed: ${err.message}`),
@@ -229,7 +303,7 @@ export class NotificationsService {
     }
 
     this.logger.log(
-      `[BROADCAST ${campaign.id}] target=${target} category=${category} sent=${totalRecipients} (customers=${customers.length}, drivers=${drivers.length})`,
+      `[BROADCAST ${campaign.id}] target=${target} category=${category} sent=${totalRecipients} (customers=${customers.length}, drivers=${drivers.length}, fcmTokens=${customerFcmTokens.length + driverFcmTokens.length})`,
     );
 
     return {
@@ -237,7 +311,7 @@ export class NotificationsService {
       recipientCount: totalRecipients,
       customerCount: customers.length,
       driverCount: drivers.length,
-      pushTokenCount: expoTokens.length,
+      pushTokenCount: customerFcmTokens.length + driverFcmTokens.length + expoTokens.length,
     };
   }
 
@@ -298,6 +372,82 @@ export class NotificationsService {
     return { ok: true, id: campaignId };
   }
 
+  private isExpoToken(token: string): boolean {
+    return token.startsWith('ExponentPushToken[') || token.startsWith('ExpoPushToken[');
+  }
+
+  private stringifyData(data?: Record<string, any>): Record<string, string> {
+    const out: Record<string, string> = {};
+    if (!data) return out;
+    for (const [k, v] of Object.entries(data)) {
+      if (v === undefined || v === null) continue;
+      out[k] = typeof v === 'string' ? v : JSON.stringify(v);
+    }
+    return out;
+  }
+
+  private async dispatchFcmBatch(
+    userType: UserType,
+    tokens: string[],
+    title: string,
+    body: string,
+    data?: Record<string, any>,
+  ) {
+    if (!this.fcmReady || tokens.length === 0) return;
+    const isDriver = userType === UserType.DRIVER;
+    const channelId = isDriver ? 'now-trip-alerts-v2' : 'now-customer-alerts-v1';
+    const sound = isDriver ? 'trip_alert' : 'default';
+    const stringData = this.stringifyData(data);
+
+    const CHUNK = 500;
+    const invalidTokens: string[] = [];
+
+    for (let i = 0; i < tokens.length; i += CHUNK) {
+      const batch = tokens.slice(i, i + CHUNK);
+      const res = await getMessaging().sendEachForMulticast({
+        tokens: batch,
+        notification: { title, body },
+        data: stringData,
+        android: {
+          priority: 'high',
+          notification: {
+            channelId,
+            sound,
+            color: '#E51922',
+            priority: 'max',
+          },
+        },
+      });
+
+      res.responses.forEach((r, idx) => {
+        if (!r.success) {
+          const code = r.error?.code;
+          if (
+            code === 'messaging/registration-token-not-registered' ||
+            code === 'messaging/invalid-registration-token'
+          ) {
+            invalidTokens.push(batch[idx]);
+          }
+        }
+      });
+    }
+
+    if (invalidTokens.length > 0) {
+      if (userType === UserType.CUSTOMER) {
+        await this.prisma.customer.updateMany({
+          where: { fcmToken: { in: invalidTokens } },
+          data: { fcmToken: null },
+        });
+      } else if (userType === UserType.DRIVER) {
+        await this.prisma.driver.updateMany({
+          where: { fcmToken: { in: invalidTokens } },
+          data: { fcmToken: null },
+        });
+      }
+      this.logger.log(`Cleaned ${invalidTokens.length} stale FCM token(s) for ${userType}`);
+    }
+  }
+
   private async dispatchExpoPushBatch(
     tokens: string[],
     title: string,
@@ -338,7 +488,7 @@ export class NotificationsService {
     }
     if (!token) return;
 
-    if (token.startsWith('ExponentPushToken[') || token.startsWith('ExpoPushToken[')) {
+    if (this.isExpoToken(token)) {
       await fetch('https://exp.host/--/api/v2/push/send', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
@@ -350,6 +500,8 @@ export class NotificationsService {
           data: data ?? {},
         }),
       });
+    } else if (this.fcmReady) {
+      await this.dispatchFcmBatch(userType, [token], title, body, data);
     }
   }
 

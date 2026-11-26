@@ -29,6 +29,7 @@ import { AppUpdateModal } from './src/components/app-update-modal';
 import { BroadcastAnnouncementModal } from './src/components/broadcast-modal';
 import {
   initCustomerNotifications,
+  registerCustomerFcmToken,
   showCustomerLocalNotification,
 } from './src/notification-service';
 
@@ -127,6 +128,12 @@ function CustomerAppContent() {
         .catch(() => undefined);
     }).then((cleanup) => {
       unsubNotif = cleanup;
+      registerCustomerFcmToken((fcmToken) =>
+        customerApi('/auth/fcm-token', {
+          method: 'POST',
+          body: JSON.stringify({ fcmToken }),
+        }).catch(() => undefined),
+      );
     });
 
     const socket = io(`${getApiBase()}/ws`, { auth: { token } });
