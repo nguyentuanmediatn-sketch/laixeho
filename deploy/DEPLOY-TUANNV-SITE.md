@@ -1,38 +1,39 @@
-# Hướng dẫn triển khai tạm lên domain `tuannv.site`
+# Hướng dẫn triển khai lên VPS Ubuntu qua SSH (`tuannv.site`)
 
-Hệ thống **NOW Thái Nguyên – Lái Xe Hộ** đã được cấu hình sẵn để chạy tạm trên `tuannv.site`, và về sau đổi sang tên miền chính thức chỉ mất 1 phút (không cần sửa code app).
+Hệ thống **NOW Thái Nguyên – Lái Xe Hộ** đã có sẵn script tự động cài toàn bộ stack (Node.js 20, PostgreSQL, Redis, PM2, Caddy auto-HTTPS SSL) cho domain tạm **`tuannv.site`**.
 
-## 1. Trỏ DNS trên nhà cung cấp tên miền (`tuannv.site`)
-Tạo 2 bản ghi **A Record** trỏ về IP VPS của bạn:
-- `@` (`tuannv.site`) → `<IP_VPS>`
-- `api` (`api.tuannv.site`) → `<IP_VPS>`
+## Bước 1: Trỏ DNS tên miền `tuannv.site` về IP VPS
+Tạo 2 bản ghi **A Record** (tắt proxy cam nếu dùng Cloudflare trong lúc Caddy cấp SSL lần đầu, hoặc bật Full SSL):
+- `@` (`tuannv.site`) → `<IP_VPS_UBUNTU>`
+- `www` (`www.tuannv.site`) → `<IP_VPS_UBUNTU>`
+- `api` (`api.tuannv.site`) → `<IP_VPS_UBUNTU>`
 
-## 2. Biến môi trường Backend (`backend/.env`)
-```env
-PORT=3005
-DATABASE_URL=postgresql://laixeho:<MAT_KHAU_MANH>@127.0.0.1:5432/laixeho_db
-JWT_SECRET=<CHUOI_BI_MAT_64_KY_TU>
-CORS_ORIGIN=https://tuannv.site
-STORAGE_PROVIDER=local
-```
-
-## 3. Build Web Admin trỏ API về `https://api.tuannv.site`
+## Bước 2: SSH vào VPS Ubuntu & chạy lệnh cài 1 chạm
 ```bash
-cd web-admin
-VITE_API_URL=https://api.tuannv.site npm run build
+ssh root@<IP_VPS_UBUNTU>
 ```
-
-## 4. Cài Caddy (tự cấp chứng chỉ SSL HTTPS miễn phí)
-Copy file [Caddyfile.tuannv.site](./Caddyfile.tuannv.site) vào `/etc/caddy/Caddyfile` và reload:
+Sau khi vào VPS, chạy duy nhất 1 lệnh:
 ```bash
-sudo systemctl reload caddy
+curl -fsSL https://raw.githubusercontent.com/nguyentuanmediatn-sketch/laixeho/main/deploy/setup-ubuntu-vps.sh | sudo bash
+```
+Script sẽ tự động:
+1. Cài Node.js 20, PostgreSQL, Redis, PM2 và Caddy SSL.
+2. Tạo database `laixeho_db` + mật khẩu ngẫu nhiên & `JWT_SECRET` bảo mật tại `/opt/laixeho/backend/.env`.
+3. Clone repo từ nhánh `main`, chạy `prisma db push` + `seed`, build Backend & Web Admin (`VITE_API_URL=https://api.tuannv.site`).
+4. Bật PM2 chạy ngầm `laixeho-api` (tự khởi động lại khi reboot VPS) và cấu hình Caddy tự xin chứng chỉ HTTPS cho `tuannv.site` và `api.tuannv.site`.
+
+## Bước 3: Kiểm tra sau khi cài xong
+- **Web Admin**: `https://tuannv.site` (tài khoản mặc định `admin` / `admin123456`)
+- **Backend API**: `https://api.tuannv.site/trips/config`
+- **App Khách hàng & App Tài xế**: Bấm biểu tượng cài đặt Server trên màn hình đăng nhập và nhập `https://api.tuannv.site` (hoặc build APK gắn sẵn `EXPO_PUBLIC_API_URL=https://api.tuannv.site`).
+- **Xem log Backend**: `pm2 logs laixeho-api`
+
+## Cập nhật code mới sau này (1 lệnh)
+```bash
+sudo bash /opt/laixeho/deploy/update-ubuntu-vps.sh
 ```
 
-Khi đó:
-- Web Admin: `https://tuannv.site`
-- Backend API & Socket.IO: `https://api.tuannv.site` (nhập URL này trong nút cài đặt Server ở màn hình đăng nhập App Khách & App Tài xế, hoặc build APK với `EXPO_PUBLIC_API_URL=https://api.tuannv.site`)
-- Link chia sẻ hành trình cho người thân: `https://tuannv.site/track/<shareToken>`
-
-## 5. Khi chuyển sang tên miền chính thức sau này
-1. Đổi `tuannv.site` trong `Caddyfile` và DNS sang tên miền mới.
-2. Vào **Web Admin → Cấu hình & Nhật ký → Tên miền công khai chia sẻ hành trình** đổi sang `https://<ten-mien-moi>` → bấm **Lưu cấu hình** (link chia sẻ hành trình cập nhật tức thì không cần build lại app).
+## Chuyển sang tên miền chính thức sau này
+1. Trỏ DNS tên miền mới về IP VPS.
+2. Chạy lại trên VPS: `DOMAIN=tenmienmoi.vn sudo bash /opt/laixeho/deploy/setup-ubuntu-vps.sh`
+3. Vào **Web Admin → Cấu hình & Nhật ký → Tên miền công khai chia sẻ hành trình** đổi thành `https://tenmienmoi.vn` → bấm **Lưu cấu hình**.

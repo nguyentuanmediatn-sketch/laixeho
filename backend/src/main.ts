@@ -8,8 +8,16 @@ import { AppModule } from './app.module';
 async function bootstrap() {
   const app = await NestFactory.create<NestExpressApplication>(AppModule);
   app.set('trust proxy', 1);
+  const rawCors = (process.env.CORS_ORIGIN || '*').trim();
+  const corsOrigin =
+    rawCors === '*'
+      ? '*'
+      : rawCors
+          .split(',')
+          .map((s) => s.trim())
+          .filter(Boolean);
   app.enableCors({
-    origin: process.env.CORS_ORIGIN || '*',
+    origin: corsOrigin,
     methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
     allowedHeaders: ['Content-Type', 'Authorization', 'Range'],
   });
