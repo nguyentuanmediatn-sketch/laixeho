@@ -44,6 +44,8 @@
         "CAMERA",
         "RECORD_AUDIO",
         "VIBRATE",
+        "POST_NOTIFICATIONS",
+        "WAKE_LOCK",
         "INTERNET"
       ]
     }

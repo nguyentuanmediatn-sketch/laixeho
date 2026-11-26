@@ -364,6 +364,7 @@ export class TripsService {
 
     if (updated) {
       this.realtime.emitToCustomer(updated.customerId, 'trip:status', updated);
+      this.realtime.emitToDriver(driverId, 'trip:assigned', updated);
       this.realtime.emitToDriver(driverId, 'trip:status', updated);
       this.realtime.emitToTrip(updated.id, 'trip:status', updated);
       this.realtime.emitToAdmin('trip:updated', updated);

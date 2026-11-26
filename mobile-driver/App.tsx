@@ -1,7 +1,8 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
+  AppState,
   Image,
   Modal,
   ScrollView,
@@ -9,7 +10,6 @@ import {
   Switch,
   Text,
   TouchableOpacity,
-  Vibration,
   View,
 } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
@@ -35,6 +35,13 @@ import {
   MaintenanceFeeView,
   WalletView,
 } from './src/components/wallet-fee-views';
+import {
+  initDriverNotifications,
+  playShortChime,
+  showLocalTripNotification,
+  startTripRingtone,
+  stopTripRingtone,
+} from './src/trip-alert-service';
 
 type Tab = 'home' | 'wallet' | 'fee' | 'history' | 'profile';
 
@@ -45,6 +52,8 @@ function DriverAppContent() {
 
   const [tab, setTab] = useState<Tab>('home');
   const [incomingOffer, setIncomingOffer] = useState<any>(null);
+  const [assignedAlert, setAssignedAlert] = useState<any>(null);
+  const [toastBanner, setToastBanner] = useState<{ title: string; body: string } | null>(null);
   const [countdown, setCountdown] = useState(0);
   const [activeTrip, setActiveTrip] = useState<any>(null);
   const [driverLoc, setDriverLoc] = useState<{ lat: number; lng: number } | null>(null);
@@ -54,6 +63,48 @@ function DriverAppContent() {
   const [notifications, setNotifications] = useState<any[]>([]);
   const [lockRemainSec, setLockRemainSec] = useState(0);
   const [completedSummary, setCompletedSummary] = useState<any>(null);
+
+  const alertedOfferIdRef = useRef<string | null>(null);
+  const alertedAssignedTripIdRef = useRef<string | null>(null);
+  const activeTripIdRef = useRef<string | null>(null);
+  const initialSyncedRef = useRef<boolean>(false);
+
+  useEffect(() => {
+    activeTripIdRef.current = activeTrip?.id ?? null;
+  }, [activeTrip?.id]);
+
+  const triggerOfferAlert = (offer: any) => {
+    if (!offer?.offerId) return;
+    setIncomingOffer(offer);
+    setCountdown(offer.timeoutSec || 30);
+    setTab('home');
+    if (alertedOfferIdRef.current !== offer.offerId) {
+      alertedOfferIdRef.current = offer.offerId;
+      startTripRingtone();
+      showLocalTripNotification({
+        title: `🔔 ĐƠN LÁI HỘ MỚI · ${offer.estimatedPrice ? fmtMoney(offer.estimatedPrice) : 'NOW TN'}`,
+        body: `Đón tại: ${offer.pickupAddress} (cách ${offer.distanceToPickupKm ?? '?'} km) — Bấm để nhận đơn ngay!`,
+        data: { kind: 'TRIP_OFFER', offerId: offer.offerId, tripId: offer.tripId },
+      });
+    }
+  };
+
+  const triggerAssignedTripAlert = (trip: any) => {
+    if (!trip?.id) return;
+    setIncomingOffer(null);
+    setActiveTrip(trip);
+    setTab('home');
+    if (alertedAssignedTripIdRef.current !== trip.id) {
+      alertedAssignedTripIdRef.current = trip.id;
+      setAssignedAlert(trip);
+      startTripRingtone();
+      showLocalTripNotification({
+        title: `🚨 TỔNG ĐÀI GÁN CHUYẾN ${trip.code || ''}`,
+        body: `Đón tại: ${trip.pickupAddress} — Bấm để nhận chuyến & đi đón ngay!`,
+        data: { kind: 'TRIP_ASSIGNED', tripId: trip.id },
+      });
+    }
+  };
 
   useEffect(() => {
     (async () => {
@@ -81,6 +132,32 @@ function DriverAppContent() {
     }
   };
 
+  const syncActiveTripAndOffer = async (alertOnNewAssigned = true) => {
+    try {
+      const active = await driverApi('/trips/active');
+      if (active?.activeTrip) {
+        const prevId = activeTripIdRef.current;
+        setActiveTrip(active.activeTrip);
+        // Nếu phát hiện chuyến mới được Tổng đài gán (trạng thái ACCEPTED mà app chưa biết) -> bật chuông & popup ngay!
+        if (
+          alertOnNewAssigned &&
+          initialSyncedRef.current &&
+          active.activeTrip.status === 'ACCEPTED' &&
+          active.activeTrip.id !== prevId &&
+          alertedAssignedTripIdRef.current !== active.activeTrip.id
+        ) {
+          triggerAssignedTripAlert(active.activeTrip);
+        }
+      }
+      if (active?.pendingOffer) {
+        triggerOfferAlert(active.pendingOffer);
+      }
+      initialSyncedRef.current = true;
+    } catch {
+      // ignore transient network blip
+    }
+  };
+
   const loadAll = async () => {
     try {
       const [me, active, wallet, hist, notifs] = await Promise.all([
@@ -91,11 +168,24 @@ function DriverAppContent() {
         driverApi('/notifications'),
       ]);
       setDriver(me);
-      if (active?.activeTrip) setActiveTrip(active.activeTrip);
-      if (active?.pendingOffer) {
-        setIncomingOffer(active.pendingOffer);
-        setCountdown(active.pendingOffer.timeoutSec || 30);
+      if (active?.activeTrip) {
+        const prevId = activeTripIdRef.current;
+        setActiveTrip(active.activeTrip);
+        if (
+          initialSyncedRef.current &&
+          active.activeTrip.status === 'ACCEPTED' &&
+          active.activeTrip.id !== prevId &&
+          alertedAssignedTripIdRef.current !== active.activeTrip.id
+        ) {
+          triggerAssignedTripAlert(active.activeTrip);
+        } else if (!initialSyncedRef.current) {
+          alertedAssignedTripIdRef.current = active.activeTrip.id;
+        }
       }
+      if (active?.pendingOffer) {
+        triggerOfferAlert(active.pendingOffer);
+      }
+      initialSyncedRef.current = true;
       setWalletData(wallet);
       setHistory(hist || []);
       setNotifications(notifs || []);
@@ -109,16 +199,36 @@ function DriverAppContent() {
     const token = getDriverToken();
     if (!token) return;
 
-    const socket = io(`${getApiBase()}/ws`, { auth: { token } });
-
-    socket.on('trip:offer', (offer: any) => {
-      Vibration.vibrate([0, 500, 250, 500, 250, 500]);
-      setIncomingOffer(offer);
-      setCountdown(offer.timeoutSec || 30);
+    let unsubNotif: (() => void) | undefined;
+    initDriverNotifications(() => {
       setTab('home');
+      syncActiveTripAndOffer(true);
+    }).then((cleanup) => {
+      unsubNotif = cleanup;
     });
-    socket.on('trip:offer_cancelled', () => setIncomingOffer(null));
+
+    const socket = io(`${getApiBase()}/ws`, {
+      auth: { token },
+      transports: ['websocket', 'polling'],
+      reconnection: true,
+      reconnectionDelay: 1500,
+    });
+
+    socket.on('connect', () => {
+      syncActiveTripAndOffer(true);
+    });
+    socket.on('trip:offer', (offer: any) => {
+      triggerOfferAlert(offer);
+    });
+    socket.on('trip:assigned', (trip: any) => {
+      triggerAssignedTripAlert(trip);
+    });
+    socket.on('trip:offer_cancelled', () => {
+      stopTripRingtone();
+      setIncomingOffer(null);
+    });
     socket.on('driver:locked', (info: any) => {
+      stopTripRingtone();
       setIncomingOffer(null);
       Alert.alert(
         'Tạm khóa quyền nhận đơn',
@@ -135,26 +245,73 @@ function DriverAppContent() {
     });
     socket.on('trip:status', (trip: any) => {
       if (trip?.status === 'CANCELLED') {
+        stopTripRingtone();
+        setAssignedAlert(null);
         setActiveTrip(null);
         Alert.alert('Chuyến đã bị hủy', trip.cancelReason || 'Khách hàng hoặc Admin đã hủy chuyến.');
         driverApi('/trips/driver-history').then(setHistory).catch(() => undefined);
       } else if (trip?.id) {
+        const isBrandNewAccepted =
+          trip.status === 'ACCEPTED' &&
+          trip.id !== activeTripIdRef.current &&
+          alertedAssignedTripIdRef.current !== trip.id;
         setActiveTrip(trip);
+        if (isBrandNewAccepted) {
+          triggerAssignedTripAlert(trip);
+        }
       }
     });
     socket.on('notification:new', (notif: any) => {
       setNotifications((prev) => [notif, ...prev]);
+      if (notif?.title) {
+        setToastBanner({ title: notif.title, body: notif.body || '' });
+        const isTripNotif =
+          notif.title.includes('đơn') || notif.title.includes('chuyến') || notif.data?.tripId;
+        if (!isTripNotif) {
+          playShortChime();
+          showLocalTripNotification({
+            title: notif.title,
+            body: notif.body || '',
+            data: notif.data || {},
+          });
+        }
+      }
+    });
+
+    const appSub = AppState.addEventListener('change', (nextState) => {
+      if (nextState === 'active') {
+        syncActiveTripAndOffer(true);
+      }
     });
 
     loadAll();
     return () => {
+      stopTripRingtone();
+      appSub.remove();
+      unsubNotif?.();
       socket.disconnect();
     };
   }, [driver?.id]);
 
+  // Safety-net polling mỗi 6 giây khi tài xế ACTIVE chưa có chuyến để không bao giờ lỡ đơn gán hoặc offer mới nếu mạng di động đổi sóng
+  useEffect(() => {
+    if (!driver?.id || driver.status !== 'ACTIVE' || activeTrip?.id) return;
+    const poller = setInterval(() => {
+      syncActiveTripAndOffer(true);
+    }, 6000);
+    return () => clearInterval(poller);
+  }, [driver?.id, driver?.status, activeTrip?.id]);
+
+  useEffect(() => {
+    if (!toastBanner) return;
+    const t = setTimeout(() => setToastBanner(null), 6000);
+    return () => clearTimeout(t);
+  }, [toastBanner]);
+
   useEffect(() => {
     if (!incomingOffer) return;
     if (countdown <= 0) {
+      stopTripRingtone();
       setIncomingOffer(null);
       return;
     }
@@ -299,10 +456,13 @@ function DriverAppContent() {
 
   const acceptOffer = async () => {
     if (!incomingOffer) return;
+    stopTripRingtone();
     try {
       const trip = await driverApi(`/trips/offers/${incomingOffer.offerId}/accept`, { method: 'POST' });
+      alertedAssignedTripIdRef.current = trip.id;
       setIncomingOffer(null);
       setActiveTrip(trip);
+      setTab('home');
     } catch (e: any) {
       Alert.alert('Không nhận được đơn', e.message);
       setIncomingOffer(null);
@@ -311,6 +471,7 @@ function DriverAppContent() {
 
   const rejectOffer = async () => {
     if (!incomingOffer) return;
+    stopTripRingtone();
     try {
       await driverApi(`/trips/offers/${incomingOffer.offerId}/reject`, { method: 'POST' });
       setIncomingOffer(null);
@@ -321,11 +482,33 @@ function DriverAppContent() {
     }
   };
 
+  const acknowledgeAssignedTrip = () => {
+    stopTripRingtone();
+    setAssignedAlert(null);
+    setTab('home');
+  };
+
+  const handleTestRingtone = async () => {
+    await playShortChime();
+    await showLocalTripNotification({
+      title: '🔔 Kiểm tra chuông báo đơn NOW Thái Nguyên',
+      body: 'Chuông báo & thông báo trên thanh trạng thái đã sẵn sàng nhận đơn mới!',
+      data: { kind: 'TEST' },
+    });
+    setToastBanner({
+      title: '🔔 Đã phát chuông & gửi thông báo thử nghiệm',
+      body: 'Nếu bạn nghe tiếng chuông và thấy banner trên máy là đã hoạt động tốt.',
+    });
+  };
+
   const handleLogout = async () => {
+    stopTripRingtone();
     await setDriverToken(null);
     setDriver(null);
     setActiveTrip(null);
     setIncomingOffer(null);
+    setAssignedAlert(null);
+    initialSyncedRef.current = false;
   };
 
   const fmtLock = (sec: number) => {
@@ -386,6 +569,30 @@ function DriverAppContent() {
           />
         </View>
       </View>
+
+      {toastBanner && (
+        <TouchableOpacity
+          activeOpacity={0.9}
+          style={styles.toastBanner}
+          onPress={() => {
+            setToastBanner(null);
+            setTab('home');
+          }}
+        >
+          <Ionicons name="notifications" size={20} color="#fff" />
+          <View style={{ flex: 1 }}>
+            <Text style={styles.toastTitle} numberOfLines={1}>
+              {toastBanner.title}
+            </Text>
+            {toastBanner.body ? (
+              <Text style={styles.toastBody} numberOfLines={2}>
+                {toastBanner.body}
+              </Text>
+            ) : null}
+          </View>
+          <Ionicons name="close" size={18} color="rgba(255,255,255,0.85)" />
+        </TouchableOpacity>
+      )}
 
       <ScrollView contentContainerStyle={styles.scroll} showsVerticalScrollIndicator={false}>
         {tab === 'home' && (
@@ -523,6 +730,10 @@ function DriverAppContent() {
                         ? `Hệ thống NOW Thái Nguyên tự động quét mở rộng đa vòng (${driver.config?.radiusStepsKm || '3,6,10'} km) quanh vị trí thật của bạn.`
                         : 'Bật công tắc Trực tuyến ở góc trên bên phải để bắt đầu nhận chuyến lái xe hộ.'}
                     </Text>
+                    <TouchableOpacity style={styles.testBellBtn} onPress={handleTestRingtone}>
+                      <Ionicons name="notifications-outline" size={16} color={COLORS.primary} />
+                      <Text style={styles.testBellTxt}>Thử chuông & thông báo nhận đơn</Text>
+                    </TouchableOpacity>
                   </View>
                 </>
               )
@@ -594,6 +805,119 @@ function DriverAppContent() {
           })}
         </View>
       </View>
+
+      {/* Global High-Priority Modal: ĐƠN LÁI HỘ MỚI (nổi lên trên mọi tab + chuông lặp) */}
+      <Modal visible={Boolean(incomingOffer)} transparent animationType="slide">
+        <View style={styles.alertModalOverlay}>
+          {incomingOffer && (
+            <View style={styles.offerCard}>
+              <LinearGradient colors={GRADIENTS.offer} style={styles.offerHead}>
+                <View style={styles.row}>
+                  <Ionicons name="notifications-circle" size={26} color="#FDE047" />
+                  <View>
+                    <Text style={styles.offerHeadTxt}>ĐƠN LÁI HỘ NOW MỚI</Text>
+                    <Text style={{ color: '#FEF08A', fontSize: 11, fontWeight: '700' }}>
+                      Bấm NHẬN ĐƠN NGAY để đi đón khách
+                    </Text>
+                  </View>
+                </View>
+                <View style={styles.countdownPill}>
+                  <Text style={styles.countdownTxt}>{countdown}s</Text>
+                </View>
+              </LinearGradient>
+              <View style={styles.offerBody}>
+                {incomingOffer.dispatchRing > 1 ? (
+                  <View style={styles.ringBadge}>
+                    <Text style={styles.ringBadgeTxt}>
+                      📡 Điều phối mở rộng · Vòng {incomingOffer.dispatchRing} (bán kính {incomingOffer.dispatchRadiusKm} km)
+                    </Text>
+                  </View>
+                ) : null}
+                <Text style={styles.bold}>📍 Đón: {incomingOffer.pickupAddress}</Text>
+                <Text style={styles.sub}>Khoảng cách tới điểm đón: {incomingOffer.distanceToPickupKm} km</Text>
+                {incomingOffer.dropoffAddress ? (
+                  <Text style={styles.info}>🏁 Trả: {incomingOffer.dropoffAddress}</Text>
+                ) : null}
+                {incomingOffer.isBookingForOther ? (
+                  <View style={styles.proxyOfferBox}>
+                    <Text style={styles.proxyOfferTxt}>
+                      👤 ĐẶT HỘ · Liên hệ: {incomingOffer.passengerName || 'Khách'} ({incomingOffer.passengerPhone})
+                    </Text>
+                  </View>
+                ) : null}
+                {incomingOffer.note ? <Text style={styles.sub}>📝 Ghi chú: {incomingOffer.note}</Text> : null}
+                {incomingOffer.estimatedPrice != null ? (
+                  <Text style={styles.offerPrice}>
+                    {fmtMoney(incomingOffer.estimatedPrice)} ({incomingOffer.distanceKm ?? '—'} km)
+                  </Text>
+                ) : null}
+                <Text style={styles.tiny}>
+                  Lưu ý: Từ chối hoặc để hết giờ đếm ngược sẽ bị tạm khóa quyền nhận đơn.
+                </Text>
+                <View style={styles.row}>
+                  <TouchableOpacity style={[styles.acceptBtn, { flex: 1.5 }]} onPress={acceptOffer}>
+                    <Text style={styles.btnTxt}>NHẬN ĐƠN NGAY ✓</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity style={[styles.rejectBtn, { flex: 1 }]} onPress={rejectOffer}>
+                    <Text style={styles.btnTxt}>TỪ CHỐI</Text>
+                  </TouchableOpacity>
+                </View>
+                <TouchableOpacity style={styles.muteBtn} onPress={stopTripRingtone}>
+                  <Ionicons name="volume-mute-outline" size={15} color={COLORS.textMuted} />
+                  <Text style={styles.tiny}>Tạm tắt chuông</Text>
+                </TouchableOpacity>
+              </View>
+            </View>
+          )}
+        </View>
+      </Modal>
+
+      {/* Global High-Priority Modal: TỔNG ĐÀI GÁN CHUYẾN MỚI (nổi lên trên mọi tab + chuông lặp) */}
+      <Modal visible={Boolean(assignedAlert)} transparent animationType="slide">
+        <View style={styles.alertModalOverlay}>
+          {assignedAlert && (
+            <View style={styles.offerCard}>
+              <LinearGradient colors={GRADIENTS.offer} style={styles.offerHead}>
+                <View style={styles.row}>
+                  <Ionicons name="megaphone" size={24} color="#FDE047" />
+                  <View>
+                    <Text style={styles.offerHeadTxt}>TỔNG ĐÀI GÁN CHUYẾN MỚI</Text>
+                    <Text style={{ color: '#FEF08A', fontSize: 11, fontWeight: '700' }}>
+                      Mã chuyến: {assignedAlert.code}
+                    </Text>
+                  </View>
+                </View>
+              </LinearGradient>
+              <View style={styles.offerBody}>
+                <Text style={styles.bold}>📍 Đón: {assignedAlert.pickupAddress}</Text>
+                {assignedAlert.dropoffAddress ? (
+                  <Text style={styles.info}>🏁 Trả: {assignedAlert.dropoffAddress}</Text>
+                ) : null}
+                {assignedAlert.isBookingForOther ? (
+                  <View style={styles.proxyOfferBox}>
+                    <Text style={styles.proxyOfferTxt}>
+                      👤 ĐẶT HỘ · Liên hệ: {assignedAlert.passengerName || 'Khách'} ({assignedAlert.passengerPhone})
+                    </Text>
+                  </View>
+                ) : assignedAlert.customer ? (
+                  <Text style={styles.sub}>
+                    📞 Khách hàng: {assignedAlert.customer.name || 'Khách NOW'} ({assignedAlert.customer.phone})
+                  </Text>
+                ) : null}
+                {assignedAlert.note ? <Text style={styles.sub}>📝 Ghi chú: {assignedAlert.note}</Text> : null}
+                {assignedAlert.estimatedPrice != null ? (
+                  <Text style={styles.offerPrice}>
+                    {fmtMoney(assignedAlert.estimatedPrice)} ({assignedAlert.distanceKm ?? '—'} km)
+                  </Text>
+                ) : null}
+                <TouchableOpacity style={styles.acceptBtn} onPress={acknowledgeAssignedTrip}>
+                  <Text style={styles.btnTxt}>NHẬN CHUYẾN & ĐI ĐÓN NGAY  →</Text>
+                </TouchableOpacity>
+              </View>
+            </View>
+          )}
+        </View>
+      </Modal>
 
       {/* Completed Trip Financial Receipt Modal */}
       <Modal visible={Boolean(completedSummary)} transparent animationType="fade">
@@ -721,6 +1045,31 @@ const styles = StyleSheet.create({
   dockLabel: { fontSize: 8.5, fontWeight: '700', color: COLORS.textMuted },
   dockLabelActive: { color: COLORS.primary, fontWeight: '900' },
   modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.6)', justifyContent: 'center', padding: 20 },
+  alertModalOverlay: { flex: 1, backgroundColor: 'rgba(15,23,42,0.78)', justifyContent: 'center', padding: 16 },
+  toastBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    backgroundColor: COLORS.primaryDark,
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+  },
+  toastTitle: { color: '#fff', fontSize: 13, fontWeight: '800' },
+  toastBody: { color: 'rgba(255,255,255,0.92)', fontSize: 11, marginTop: 1 },
+  testBellBtn: {
+    marginTop: 4,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    backgroundColor: '#FEF2F2',
+    borderWidth: 1,
+    borderColor: '#FECACA',
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+    borderRadius: 20,
+  },
+  testBellTxt: { fontSize: 12, fontWeight: '800', color: COLORS.primary },
+  muteBtn: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 5, paddingTop: 4 },
   modalCard: { backgroundColor: '#FFFFFF', borderRadius: 22, padding: 20, gap: 11 },
   modalTitle: { fontSize: 18, fontWeight: '900', color: COLORS.text, textAlign: 'center' },
   summaryBox: { backgroundColor: COLORS.primarySoft, borderWidth: 1, borderColor: '#FECACA', padding: 14, borderRadius: 14, alignItems: 'center' },
