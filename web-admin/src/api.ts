@@ -30,6 +30,31 @@ export async function apiFetch<T = any>(path: string, options: RequestInit = {})
   return res.json();
 }
 
+export async function uploadAdminImage(file: File): Promise<string> {
+  const ext = (file.name.split('.').pop() || 'jpg').toLowerCase();
+  const allowed = ['jpg', 'jpeg', 'png', 'webp'];
+  if (!allowed.includes(ext)) {
+    throw new Error('Chỉ hỗ trợ ảnh định dạng JPG, PNG hoặc WEBP');
+  }
+  if (file.size > 15 * 1024 * 1024) {
+    throw new Error('Dung lượng ảnh không được vượt quá 15MB');
+  }
+  const contentType = file.type || 'image/jpeg';
+  const presign = await apiFetch<{ uploadUrl: string; publicUrl: string }>('/admin/drivers/presign', {
+    method: 'POST',
+    body: JSON.stringify({ ext, contentType }),
+  });
+  const putRes = await fetch(presign.uploadUrl, {
+    method: 'PUT',
+    headers: { 'Content-Type': contentType },
+    body: file,
+  });
+  if (!putRes.ok) {
+    throw new Error(`Tải ảnh lên thất bại (HTTP ${putRes.status})`);
+  }
+  return presign.publicUrl;
+}
+
 export const fmtMoney = (n?: number | null) =>
   n != null ? `${n.toLocaleString('vi-VN')}đ` : '—';
 

@@ -11,7 +11,7 @@ import {
   Query,
   Req,
 } from '@nestjs/common';
-import { IsBoolean, IsEnum, IsIn, IsInt, IsNotEmpty, IsNumber, IsOptional, IsString } from 'class-validator';
+import { IsArray, IsBoolean, IsEnum, IsIn, IsInt, IsNotEmpty, IsNumber, IsOptional, IsString } from 'class-validator';
 import { DriverStatus, MaintenanceFeeStatus, TripStatus, UserType, WalletTxType } from '@prisma/client';
 import { Auth } from '../auth/auth.decorator';
 import { PrismaService } from '../prisma/prisma.service';
@@ -21,6 +21,7 @@ import { MaintenanceService } from '../maintenance/maintenance.service';
 import { PricingService } from '../pricing/pricing.service';
 import { RedisService } from '../redis/redis.service';
 import { RealtimeGateway } from '../realtime/realtime.gateway';
+import { StorageService } from '../storage/storage.service';
 
 class ManualTripDto {
   @IsString() @IsNotEmpty() customerPhone: string;
@@ -65,6 +66,30 @@ class UpdateDriverStatusDto {
   @IsEnum(DriverStatus) status: DriverStatus;
 }
 
+class CreateDriverByAdminDto {
+  @IsString() @IsNotEmpty() phone: string;
+  @IsString() @IsNotEmpty() name: string;
+  @IsOptional() @IsEnum(DriverStatus) status?: DriverStatus;
+  @IsOptional() @IsInt() initialBalance?: number;
+  @IsOptional() @IsString() initialNote?: string;
+  @IsOptional() @IsString() avatarUrl?: string;
+  @IsOptional() @IsArray() @IsString({ each: true }) idCardUrls?: string[];
+  @IsOptional() @IsArray() @IsString({ each: true }) licenseUrls?: string[];
+}
+
+class UpdateDriverByAdminDto {
+  @IsOptional() @IsString() phone?: string;
+  @IsOptional() @IsString() name?: string;
+  @IsOptional() @IsString() avatarUrl?: string;
+  @IsOptional() @IsArray() @IsString({ each: true }) idCardUrls?: string[];
+  @IsOptional() @IsArray() @IsString({ each: true }) licenseUrls?: string[];
+}
+
+class AdminPresignDocDto {
+  @IsOptional() @IsString() ext?: string;
+  @IsOptional() @IsString() contentType?: string;
+}
+
 class ConfirmFeeDto {
   @IsOptional() @IsString() period?: string;
 }
@@ -100,6 +125,7 @@ export class AdminController {
     private readonly pricingService: PricingService,
     private readonly redis: RedisService,
     private readonly realtime: RealtimeGateway,
+    private readonly storage: StorageService,
   ) {}
 
   private buildDateRange(from?: string, to?: string) {
@@ -348,6 +374,105 @@ export class AdminController {
     });
   }
 
+  @Post('drivers/presign')
+  presignDriverDoc(@Req() req: any, @Body() body: AdminPresignDocDto) {
+    const origin = `${req.protocol}://${req.get('host')}`;
+    return this.storage.createPresignedUpload(
+      'drivers/admin',
+      body.ext || 'jpg',
+      body.contentType || 'image/jpeg',
+      origin,
+    );
+  }
+
+  @Post('drivers')
+  async createDriver(@Req() req: any, @Body() dto: CreateDriverByAdminDto) {
+    const phone = dto.phone.trim().replace(/[\s.-]/g, '');
+    if (!/^0\d{8,10}$/.test(phone)) {
+      throw new BadRequestException('Số điện thoại không hợp lệ (bắt đầu bằng số 0, từ 9–11 chữ số)');
+    }
+    const name = dto.name.trim();
+    if (name.length < 2) {
+      throw new BadRequestException('Vui lòng nhập họ tên đầy đủ của tài xế');
+    }
+
+    const initialBalance = dto.initialBalance ?? 0;
+    if (!Number.isInteger(initialBalance) || initialBalance < 0 || initialBalance > 100_000_000) {
+      throw new BadRequestException('Số dư ví khởi tạo phải từ 0đ đến 100.000.000đ');
+    }
+
+    const existing = await this.prisma.driver.findUnique({ where: { phone } });
+    if (existing) {
+      throw new BadRequestException(
+        `Số điện thoại ${phone} đã được đăng ký trước đó (${existing.name || 'Chưa đặt tên'})`,
+      );
+    }
+
+    const status = dto.status ?? DriverStatus.ACTIVE;
+    const feeDueDate = status === DriverStatus.ACTIVE ? this.addOneMonth(new Date()) : null;
+    const adminId = req.user.sub;
+    const initialNote = dto.initialNote?.trim() || 'Số dư khởi tạo khi Admin cấp tài khoản';
+
+    const driver = await this.prisma.$transaction(async (tx) => {
+      const created = await tx.driver.create({
+        data: {
+          phone,
+          name,
+          status,
+          isOnline: false,
+          feeDueDate,
+          ...(dto.avatarUrl?.trim() ? { avatarUrl: dto.avatarUrl.trim() } : {}),
+          ...(dto.idCardUrls ? { idCardUrls: dto.idCardUrls } : {}),
+          ...(dto.licenseUrls ? { licenseUrls: dto.licenseUrls } : {}),
+          wallet: {
+            create: {
+              balance: initialBalance,
+              ...(initialBalance > 0
+                ? {
+                    transactions: {
+                      create: {
+                        type: WalletTxType.TOPUP,
+                        amount: initialBalance,
+                        balanceAfter: initialBalance,
+                        adminId,
+                        note: initialNote,
+                      },
+                    },
+                  }
+                : {}),
+            },
+          },
+        },
+        include: {
+          wallet: true,
+        },
+      });
+
+      await tx.auditLog.create({
+        data: {
+          adminId,
+          action: 'CREATE_DRIVER',
+          after: {
+            driverId: created.id,
+            phone: created.phone,
+            name: created.name,
+            status: created.status,
+            initialBalance,
+          },
+        },
+      });
+
+      return created;
+    });
+
+    const otpInfo = await this.generateOrReuseDriverOtp(driver.phone);
+    return {
+      driver,
+      loginOtp: otpInfo.otp,
+      otpExpiresInSec: otpInfo.expiresInSec,
+    };
+  }
+
   @Get('drivers')
   listDrivers(@Query('status') status?: DriverStatus, @Query('overdueFee') overdueFee?: string) {
     const where: any = {};
@@ -386,6 +511,115 @@ export class AdminController {
     });
     if (!driver) throw new NotFoundException('Không tìm thấy tài xế');
     return driver;
+  }
+
+  @Patch('drivers/:id')
+  async updateDriverProfile(
+    @Req() req: any,
+    @Param('id') id: string,
+    @Body() dto: UpdateDriverByAdminDto,
+  ) {
+    const driver = await this.prisma.driver.findUnique({ where: { id } });
+    if (!driver) throw new NotFoundException('Không tìm thấy tài xế');
+
+    let nextPhone = driver.phone;
+    if (dto.phone !== undefined) {
+      const normalized = dto.phone.trim().replace(/[\s.-]/g, '');
+      if (!/^0\d{8,10}$/.test(normalized)) {
+        throw new BadRequestException('Số điện thoại không hợp lệ (bắt đầu bằng số 0, từ 9–11 chữ số)');
+      }
+      if (normalized !== driver.phone) {
+        const dup = await this.prisma.driver.findUnique({ where: { phone: normalized } });
+        if (dup) {
+          throw new BadRequestException(`Số điện thoại ${normalized} đã thuộc về tài xế khác`);
+        }
+        nextPhone = normalized;
+      }
+    }
+
+    const nextName = dto.name !== undefined ? dto.name.trim() : driver.name;
+    if (dto.name !== undefined && (!nextName || nextName.length < 2)) {
+      throw new BadRequestException('Họ tên tài xế phải có ít nhất 2 ký tự');
+    }
+
+    const updated = await this.prisma.driver.update({
+      where: { id },
+      data: {
+        phone: nextPhone,
+        name: nextName,
+        ...(dto.avatarUrl !== undefined ? { avatarUrl: dto.avatarUrl.trim() || null } : {}),
+        ...(dto.idCardUrls !== undefined ? { idCardUrls: dto.idCardUrls } : {}),
+        ...(dto.licenseUrls !== undefined ? { licenseUrls: dto.licenseUrls } : {}),
+      },
+      include: { wallet: true },
+    });
+
+    await this.prisma.auditLog.create({
+      data: {
+        adminId: req.user.sub,
+        action: 'UPDATE_DRIVER_PROFILE',
+        before: {
+          driverId: id,
+          phone: driver.phone,
+          name: driver.name,
+          avatarUrl: driver.avatarUrl,
+          idCardCount: driver.idCardUrls?.length ?? 0,
+          licenseCount: driver.licenseUrls?.length ?? 0,
+        },
+        after: {
+          driverId: id,
+          phone: updated.phone,
+          name: updated.name,
+          avatarUrl: updated.avatarUrl,
+          idCardCount: updated.idCardUrls?.length ?? 0,
+          licenseCount: updated.licenseUrls?.length ?? 0,
+        },
+      },
+    });
+
+    return updated;
+  }
+
+  @Post('drivers/:id/issue-otp')
+  async issueDriverOtp(@Req() req: any, @Param('id') id: string) {
+    const driver = await this.prisma.driver.findUnique({ where: { id } });
+    if (!driver) throw new NotFoundException('Không tìm thấy tài xế');
+
+    const otpInfo = await this.generateOrReuseDriverOtp(driver.phone);
+    await this.prisma.auditLog.create({
+      data: {
+        adminId: req.user.sub,
+        action: 'ISSUE_DRIVER_OTP',
+        after: { driverId: driver.id, phone: driver.phone },
+      },
+    });
+
+    return {
+      driverId: driver.id,
+      phone: driver.phone,
+      name: driver.name,
+      ...otpInfo,
+    };
+  }
+
+  private async generateOrReuseDriverOtp(phone: string) {
+    const bypassPhones = (process.env.OTP_BYPASS_PHONES || '')
+      .split(',')
+      .map((p) => p.trim())
+      .filter(Boolean);
+    const isBypass = bypassPhones.includes(phone);
+    const codeKey = `otp:code:DRIVER:${phone}`;
+    const rateKey = `otp:rate:DRIVER:${phone}`;
+    const ttlSec = 600;
+
+    const existingOtp = await this.redis.get(codeKey);
+    const otp = isBypass
+      ? '123456'
+      : existingOtp || Math.floor(100000 + Math.random() * 900000).toString();
+
+    await this.redis.set(codeKey, otp, ttlSec);
+    await this.redis.del(rateKey);
+    return { otp, expiresInSec: ttlSec };
   }
 
   @Patch('drivers/:id/status')
