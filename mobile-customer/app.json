@@ -2,7 +2,7 @@
   "expo": {
     "name": "NOW TN - Lái Xe Hộ",
     "slug": "lai-xe-ho-khach-hang",
-    "version": "1.1.0",
+    "version": "1.2.0",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "platforms": ["ios", "android"],
@@ -27,7 +27,7 @@
         "foregroundImage": "./assets/icon.png",
         "backgroundColor": "#E51922"
       },
-      "permissions": ["ACCESS_FINE_LOCATION", "ACCESS_COARSE_LOCATION", "REQUEST_INSTALL_PACKAGES", "INTERNET"]
+      "permissions": ["ACCESS_FINE_LOCATION", "ACCESS_COARSE_LOCATION", "POST_NOTIFICATIONS", "REQUEST_INSTALL_PACKAGES", "VIBRATE", "INTERNET"]
     }
   }
 }

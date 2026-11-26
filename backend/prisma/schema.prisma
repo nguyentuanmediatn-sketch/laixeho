@@ -115,6 +115,7 @@ model Admin {
   confirmedFees       MaintenanceFee[]
   auditLogs           AuditLog[]
   updatedSettings     Setting[]
+  broadcasts          BroadcastCampaign[]
 
   @@map("admins")
 }
@@ -374,4 +375,24 @@ model Partner {
   createdAt         DateTime @default(now()) @map("created_at")
 
   @@map("partners")
+}
+
+model BroadcastCampaign {
+  id               String   @id @default(uuid())
+  title            String
+  body             String
+  category         String   @default("GENERAL") // PROMO | UPDATE | SYSTEM | GENERAL
+  target           String   // ALL | CUSTOMERS | DRIVERS | ACTIVE_DRIVERS
+  showPopup        Boolean  @default(false) @map("show_popup")
+  actionUrl        String?  @map("action_url")
+  recipientCount   Int      @default(0) @map("recipient_count")
+  customerCount    Int      @default(0) @map("customer_count")
+  driverCount      Int      @default(0) @map("driver_count")
+  createdByAdminId String   @map("created_by_admin_id")
+  createdAt        DateTime @default(now()) @map("created_at")
+
+  createdByAdmin Admin @relation(fields: [createdByAdminId], references: [id])
+
+  @@index([createdAt])
+  @@map("broadcast_campaigns")
 }

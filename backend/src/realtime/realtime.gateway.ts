@@ -47,6 +47,10 @@ export class RealtimeGateway implements OnGatewayConnection, OnGatewayDisconnect
       client.join(room);
       if (payload.role === 'ADMIN') {
         client.join('admins');
+      } else if (payload.role === 'CUSTOMER') {
+        client.join('customers');
+      } else if (payload.role === 'DRIVER') {
+        client.join('drivers');
       }
       this.logger.debug(`WS connected: ${client.id} (${room})`);
     } catch {

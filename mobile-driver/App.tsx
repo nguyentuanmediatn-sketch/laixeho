@@ -43,6 +43,7 @@ import {
   stopTripRingtone,
 } from './src/trip-alert-service';
 import { AppUpdateModal } from './src/components/app-update-modal';
+import { BroadcastAnnouncementModal } from './src/components/broadcast-modal';
 
 type Tab = 'home' | 'wallet' | 'fee' | 'history' | 'profile';
 
@@ -64,12 +65,35 @@ function DriverAppContent() {
   const [notifications, setNotifications] = useState<any[]>([]);
   const [lockRemainSec, setLockRemainSec] = useState(0);
   const [completedSummary, setCompletedSummary] = useState<any>(null);
+  const [popupNotif, setPopupNotif] = useState<any | null>(null);
   const [updateCheckSignal, setUpdateCheckSignal] = useState(0);
 
   const alertedOfferIdRef = useRef<string | null>(null);
   const alertedAssignedTripIdRef = useRef<string | null>(null);
   const activeTripIdRef = useRef<string | null>(null);
   const initialSyncedRef = useRef<boolean>(false);
+  const shownPopupIdsRef = useRef<Set<string>>(new Set());
+
+  const maybeShowPendingPopup = (list: any[]) => {
+    const pending = (list || []).find(
+      (n) => n?.data?.kind === 'BROADCAST' && n?.data?.showPopup && !n.readAt && !shownPopupIdsRef.current.has(n.id),
+    );
+    if (pending) {
+      shownPopupIdsRef.current.add(pending.id);
+      setPopupNotif(pending);
+    }
+  };
+
+  const markNotifRead = (id: string) => {
+    const nowIso = new Date().toISOString();
+    setNotifications((prev) => prev.map((n) => (n.id === id ? { ...n, readAt: n.readAt || nowIso } : n)));
+    driverApi(`/notifications/${id}/read`, { method: 'PATCH' }).catch(() => undefined);
+  };
+
+  const dismissPopupNotif = (notif: any) => {
+    setPopupNotif(null);
+    if (notif?.id) markNotifRead(notif.id);
+  };
 
   useEffect(() => {
     activeTripIdRef.current = activeTrip?.id ?? null;
@@ -190,7 +214,9 @@ function DriverAppContent() {
       initialSyncedRef.current = true;
       setWalletData(wallet);
       setHistory(hist || []);
-      setNotifications(notifs || []);
+      const notifList = notifs || [];
+      setNotifications(notifList);
+      maybeShowPendingPopup(notifList);
     } catch {
       // ignore
     }
@@ -266,8 +292,13 @@ function DriverAppContent() {
     socket.on('app:update_available', () => {
       setUpdateCheckSignal((n) => n + 1);
     });
+    socket.on('broadcast:retracted', (info: { broadcastId?: string }) => {
+      if (!info?.broadcastId) return;
+      setNotifications((prev) => prev.filter((n) => n?.data?.broadcastId !== info.broadcastId));
+      setPopupNotif((cur: any) => (cur?.data?.broadcastId === info.broadcastId ? null : cur));
+    });
     socket.on('notification:new', (notif: any) => {
-      setNotifications((prev) => [notif, ...prev]);
+      setNotifications((prev) => (prev.some((x) => x.id === notif?.id) ? prev : [notif, ...prev]));
       if (notif?.title) {
         setToastBanner({ title: notif.title, body: notif.body || '' });
         const isTripNotif =
@@ -280,12 +311,22 @@ function DriverAppContent() {
             data: notif.data || {},
           });
         }
+        if (notif?.data?.kind === 'BROADCAST' && notif?.data?.showPopup) {
+          shownPopupIdsRef.current.add(notif.id);
+          setPopupNotif(notif);
+        }
       }
     });
 
     const appSub = AppState.addEventListener('change', (nextState) => {
       if (nextState === 'active') {
         syncActiveTripAndOffer(true);
+        driverApi('/notifications')
+          .then((list) => {
+            setNotifications(list || []);
+            maybeShowPendingPopup(list || []);
+          })
+          .catch(() => undefined);
       }
     });
 
@@ -764,7 +805,16 @@ function DriverAppContent() {
         )}
 
         {tab === 'history' && (
-          <DriverHistoryAndNotifsView trips={history} notifications={notifications} />
+          <DriverHistoryAndNotifsView
+            trips={history}
+            notifications={notifications}
+            onMarkRead={markNotifRead}
+            onMarkAllRead={async () => {
+              await driverApi('/notifications/read-all', { method: 'POST' });
+              const list = await driverApi('/notifications');
+              setNotifications(list || []);
+            }}
+          />
         )}
 
         {tab === 'profile' && (
@@ -976,6 +1026,10 @@ function DriverAppContent() {
         </View>
       </Modal>
 
+      <BroadcastAnnouncementModal
+        notification={!incomingOffer && !assignedAlert ? popupNotif : null}
+        onDismiss={dismissPopupNotif}
+      />
       <AppUpdateModal apiBase={serverUrl} refreshSignal={updateCheckSignal} />
     </SafeAreaView>
   );

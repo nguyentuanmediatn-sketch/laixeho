@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
+  AppState,
   Image,
   ScrollView,
   StyleSheet,
@@ -25,6 +26,11 @@ import { BookingView } from './src/components/booking-view';
 import { ActiveTripView } from './src/components/active-trip-view';
 import { HistoryTab, NotificationsTab, ProfileTab } from './src/components/history-profile-view';
 import { AppUpdateModal } from './src/components/app-update-modal';
+import { BroadcastAnnouncementModal } from './src/components/broadcast-modal';
+import {
+  initCustomerNotifications,
+  showCustomerLocalNotification,
+} from './src/notification-service';
 
 type Tab = 'book' | 'history' | 'notifications' | 'profile';
 
@@ -42,8 +48,32 @@ function CustomerAppContent() {
   });
   const [history, setHistory] = useState<any[]>([]);
   const [notifications, setNotifications] = useState<any[]>([]);
+  const [toastBanner, setToastBanner] = useState<{ title: string; body: string } | null>(null);
+  const [popupNotif, setPopupNotif] = useState<any | null>(null);
   const [updateCheckSignal, setUpdateCheckSignal] = useState(0);
   const socketRef = useRef<Socket | null>(null);
+  const shownPopupIdsRef = useRef<Set<string>>(new Set());
+
+  const maybeShowPendingPopup = (list: any[]) => {
+    const pending = (list || []).find(
+      (n) => n?.data?.kind === 'BROADCAST' && n?.data?.showPopup && !n.readAt && !shownPopupIdsRef.current.has(n.id),
+    );
+    if (pending) {
+      shownPopupIdsRef.current.add(pending.id);
+      setPopupNotif(pending);
+    }
+  };
+
+  const markNotifRead = (id: string) => {
+    const nowIso = new Date().toISOString();
+    setNotifications((prev) => prev.map((n) => (n.id === id ? { ...n, readAt: n.readAt || nowIso } : n)));
+    customerApi(`/notifications/${id}/read`, { method: 'PATCH' }).catch(() => undefined);
+  };
+
+  const dismissPopupNotif = (notif: any) => {
+    setPopupNotif(null);
+    if (notif?.id) markNotifRead(notif.id);
+  };
 
   useEffect(() => {
     (async () => {
@@ -72,7 +102,9 @@ function CustomerAppContent() {
       ]);
       if (active) setActiveTrip(active);
       setHistory(hist || []);
-      setNotifications(notifs || []);
+      const notifList = notifs || [];
+      setNotifications(notifList);
+      maybeShowPendingPopup(notifList);
       if (pubCfg?.publicTrackBaseUrl) setPublicConfig(pubCfg);
     } catch {
       // ignore
@@ -83,6 +115,19 @@ function CustomerAppContent() {
     if (!user) return;
     const token = getCustomerToken();
     if (!token) return;
+
+    let unsubNotif: (() => void) | undefined;
+    initCustomerNotifications(() => {
+      setTab('notifications');
+      customerApi('/notifications')
+        .then((list) => {
+          setNotifications(list || []);
+          maybeShowPendingPopup(list || []);
+        })
+        .catch(() => undefined);
+    }).then((cleanup) => {
+      unsubNotif = cleanup;
+    });
 
     const socket = io(`${getApiBase()}/ws`, { auth: { token } });
     socketRef.current = socket;
@@ -119,15 +164,51 @@ function CustomerAppContent() {
       setUpdateCheckSignal((n) => n + 1);
     });
     socket.on('notification:new', (notif: any) => {
-      setNotifications((prev) => [notif, ...prev]);
+      setNotifications((prev) => (prev.some((x) => x.id === notif?.id) ? prev : [notif, ...prev]));
+      if (notif?.title) {
+        setToastBanner({ title: notif.title, body: notif.body || '' });
+        showCustomerLocalNotification({
+          title: notif.title,
+          body: notif.body || '',
+          data: notif.data || {},
+        });
+        if (notif?.data?.kind === 'BROADCAST' && notif?.data?.showPopup) {
+          shownPopupIdsRef.current.add(notif.id);
+          setPopupNotif(notif);
+        }
+      }
+    });
+    socket.on('broadcast:retracted', (info: { broadcastId?: string }) => {
+      if (!info?.broadcastId) return;
+      setNotifications((prev) => prev.filter((n) => n?.data?.broadcastId !== info.broadcastId));
+      setPopupNotif((cur: any) => (cur?.data?.broadcastId === info.broadcastId ? null : cur));
+    });
+
+    const appSub = AppState.addEventListener('change', (nextState) => {
+      if (nextState === 'active') {
+        customerApi('/notifications')
+          .then((list) => {
+            setNotifications(list || []);
+            maybeShowPendingPopup(list || []);
+          })
+          .catch(() => undefined);
+      }
     });
 
     loadInitialData();
     return () => {
+      appSub.remove();
+      unsubNotif?.();
       socket.disconnect();
       socketRef.current = null;
     };
   }, [user?.id]);
+
+  useEffect(() => {
+    if (!toastBanner) return;
+    const t = setTimeout(() => setToastBanner(null), 6000);
+    return () => clearTimeout(t);
+  }, [toastBanner]);
 
   useEffect(() => {
     if (activeTrip?.id && socketRef.current) {
@@ -196,6 +277,30 @@ function CustomerAppContent() {
         </TouchableOpacity>
       </View>
 
+      {toastBanner && (
+        <TouchableOpacity
+          activeOpacity={0.9}
+          style={styles.toastBanner}
+          onPress={() => {
+            setToastBanner(null);
+            setTab('notifications');
+          }}
+        >
+          <Ionicons name="notifications" size={20} color="#fff" />
+          <View style={{ flex: 1 }}>
+            <Text style={styles.toastTitle} numberOfLines={1}>
+              {toastBanner.title}
+            </Text>
+            {toastBanner.body ? (
+              <Text style={styles.toastBody} numberOfLines={2}>
+                {toastBanner.body}
+              </Text>
+            ) : null}
+          </View>
+          <Ionicons name="close" size={18} color="rgba(255,255,255,0.85)" />
+        </TouchableOpacity>
+      )}
+
       <ScrollView
         contentContainerStyle={styles.scroll}
         keyboardShouldPersistTaps="handled"
@@ -227,6 +332,7 @@ function CustomerAppContent() {
         {tab === 'notifications' && (
           <NotificationsTab
             items={notifications}
+            onMarkRead={markNotifRead}
             onMarkAllRead={async () => {
               await customerApi('/notifications/read-all', { method: 'POST' });
               const list = await customerApi('/notifications');
@@ -276,6 +382,7 @@ function CustomerAppContent() {
         </View>
       </View>
 
+      <BroadcastAnnouncementModal notification={popupNotif} onDismiss={dismissPopupNotif} />
       <AppUpdateModal apiBase={serverUrl} refreshSignal={updateCheckSignal} />
     </SafeAreaView>
   );
@@ -326,4 +433,14 @@ const styles = StyleSheet.create({
   dockLabel: { fontSize: 9, fontWeight: '700', color: COLORS.textMuted },
   dockLabelActive: { color: COLORS.primary, fontWeight: '800' },
   dotBadge: { position: 'absolute', top: -2, right: -3, width: 7, height: 7, borderRadius: 4, backgroundColor: COLORS.primary },
+  toastBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    backgroundColor: COLORS.primaryDark,
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+  },
+  toastTitle: { color: '#fff', fontSize: 13, fontWeight: '800' },
+  toastBody: { color: 'rgba(255,255,255,0.92)', fontSize: 11, marginTop: 1 },
 });

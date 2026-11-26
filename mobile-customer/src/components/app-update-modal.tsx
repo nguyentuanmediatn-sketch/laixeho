@@ -17,7 +17,7 @@ import * as IntentLauncher from 'expo-intent-launcher';
 import { getApiBase } from '../api';
 import { COLORS, GRADIENTS } from '../theme';
 
-export const CURRENT_APP_VERSION = '1.1.0';
+export const CURRENT_APP_VERSION = '1.2.0';
 
 interface AppUpdateInfo {
   latestVersion: string;

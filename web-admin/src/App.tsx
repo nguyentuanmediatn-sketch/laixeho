@@ -13,6 +13,7 @@ import {
   AlertOctagon,
   ExternalLink,
   CheckCircle2,
+  Megaphone,
 } from 'lucide-react';
 import { io } from 'socket.io-client';
 import { API_BASE, apiFetch, fmtDateTime, getToken, setToken } from './api';
@@ -24,8 +25,9 @@ import { CustomersTab } from './components/customers-tab';
 import { SettingsTab } from './components/settings-tab';
 import { FinanceTab } from './components/finance-tab';
 import { PartnersTab } from './components/partners-tab';
+import { BroadcastsTab } from './components/broadcasts-tab';
 
-type Tab = 'dashboard' | 'manual' | 'trips' | 'finance' | 'drivers' | 'partners' | 'customers' | 'settings';
+type Tab = 'dashboard' | 'manual' | 'trips' | 'finance' | 'drivers' | 'partners' | 'customers' | 'broadcasts' | 'settings';
 
 export default function App() {
   const [token, setAuthToken] = useState<string | null>(getToken());
@@ -279,6 +281,7 @@ export default function App() {
           { id: 'drivers', label: 'Tài xế, Ví & Phí', icon: Wallet, badge: stats?.pendingDrivers },
           { id: 'partners', label: 'Đối tác Quán / CTV', icon: Store },
           { id: 'customers', label: 'Khách hàng', icon: Users },
+          { id: 'broadcasts', label: 'Gửi thông báo', icon: Megaphone },
           { id: 'settings', label: 'Cấu hình & Nhật ký', icon: SettingsIcon },
         ].map((item) => {
           const Icon = item.icon;
@@ -449,6 +452,8 @@ export default function App() {
         )}
 
         {tab === 'customers' && <CustomersTab customers={customers} />}
+
+        {tab === 'broadcasts' && <BroadcastsTab onNotify={(msg) => setStatusMsg(msg)} />}
 
         {tab === 'settings' && (
           <SettingsTab

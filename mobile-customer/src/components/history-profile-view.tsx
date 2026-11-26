@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Alert, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
+import { Alert, Linking, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { Ionicons } from '@expo/vector-icons';
 import { customerApi, fmtMoney, STATUS_LABELS } from '../api';
@@ -55,11 +55,20 @@ export function HistoryTab({ history }: { history: any[] }) {
   );
 }
 
+const BROADCAST_BADGE: Record<string, { label: string; bg: string; fg: string }> = {
+  PROMO: { label: '🎁 Khuyến mại', bg: '#FFE4E6', fg: '#BE123C' },
+  UPDATE: { label: '🚀 Cập nhật', bg: '#E0E7FF', fg: '#3730A3' },
+  SYSTEM: { label: '📢 Hệ thống', bg: '#FEF3C7', fg: '#92400E' },
+  GENERAL: { label: '🔔 Thông báo', bg: '#F1F5F9', fg: '#334155' },
+};
+
 export function NotificationsTab({
   items,
+  onMarkRead,
   onMarkAllRead,
 }: {
   items: any[];
+  onMarkRead?: (id: string) => void;
   onMarkAllRead: () => void;
 }) {
   return (
@@ -78,16 +87,44 @@ export function NotificationsTab({
           <Text style={styles.emptyTxt}>Chưa có thông báo nào.</Text>
         </View>
       )}
-      {items.map((n) => (
-        <View key={n.id} style={[styles.card, !n.readAt && styles.unreadCard]}>
-          <View style={styles.rowBetween}>
-            <Text style={styles.code}>{n.title}</Text>
-            {!n.readAt && <View style={styles.unreadDot} />}
-          </View>
-          <Text style={styles.info}>{n.body}</Text>
-          <Text style={styles.sub}>{new Date(n.sentAt).toLocaleString('vi-VN')}</Text>
-        </View>
-      ))}
+      {items.map((n) => {
+        const badge = n?.data?.kind === 'BROADCAST' ? BROADCAST_BADGE[n.data.category || 'GENERAL'] : null;
+        const actionUrl = n?.data?.actionUrl as string | undefined;
+        return (
+          <TouchableOpacity
+            key={n.id}
+            activeOpacity={0.85}
+            onPress={() => {
+              if (!n.readAt) onMarkRead?.(n.id);
+            }}
+            style={[styles.card, !n.readAt && styles.unreadCard]}
+          >
+            {badge && (
+              <View style={{ alignSelf: 'flex-start', backgroundColor: badge.bg, paddingHorizontal: 8, paddingVertical: 3, borderRadius: 8 }}>
+                <Text style={{ fontSize: 10.5, fontWeight: '800', color: badge.fg }}>{badge.label}</Text>
+              </View>
+            )}
+            <View style={styles.rowBetween}>
+              <Text style={[styles.code, { flex: 1 }]}>{n.title}</Text>
+              {!n.readAt && <View style={styles.unreadDot} />}
+            </View>
+            <Text style={styles.info}>{n.body}</Text>
+            {actionUrl ? (
+              <TouchableOpacity
+                style={styles.actionLinkBtn}
+                onPress={() => {
+                  if (!n.readAt) onMarkRead?.(n.id);
+                  Linking.openURL(actionUrl).catch(() => undefined);
+                }}
+              >
+                <Ionicons name="open-outline" size={14} color="#FFFFFF" />
+                <Text style={styles.actionLinkTxt}>Xem chi tiết</Text>
+              </TouchableOpacity>
+            ) : null}
+            <Text style={styles.sub}>{new Date(n.sentAt).toLocaleString('vi-VN')}</Text>
+          </TouchableOpacity>
+        );
+      })}
     </View>
   );
 }
@@ -213,6 +250,17 @@ const styles = StyleSheet.create({
   price: { fontSize: 16, fontWeight: '900', color: COLORS.primary },
   mediaChip: { flexDirection: 'row', alignItems: 'center', gap: 5, backgroundColor: COLORS.primarySoft, paddingHorizontal: 10, paddingVertical: 6, borderRadius: 10 },
   mediaChipTxt: { color: COLORS.primary, fontWeight: '700', fontSize: 12 },
+  actionLinkBtn: {
+    alignSelf: 'flex-start',
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+    backgroundColor: COLORS.primary,
+    paddingHorizontal: 12,
+    paddingVertical: 7,
+    borderRadius: 10,
+  },
+  actionLinkTxt: { color: '#FFFFFF', fontWeight: '800', fontSize: 12 },
   avatarRing: { width: 58, height: 58, borderRadius: 29, padding: 3, alignItems: 'center', justifyContent: 'center' },
   avatarInner: { width: 52, height: 52, borderRadius: 26, backgroundColor: '#FFFFFF', alignItems: 'center', justifyContent: 'center' },
   avatarChar: { fontSize: 22, fontWeight: '900', color: COLORS.primary },

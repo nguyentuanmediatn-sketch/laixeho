@@ -2,6 +2,7 @@ import {
   BadRequestException,
   Body,
   Controller,
+  Delete,
   Get,
   NotFoundException,
   Param,
@@ -10,7 +11,7 @@ import {
   Query,
   Req,
 } from '@nestjs/common';
-import { IsBoolean, IsEnum, IsInt, IsNotEmpty, IsNumber, IsOptional, IsString } from 'class-validator';
+import { IsBoolean, IsEnum, IsIn, IsInt, IsNotEmpty, IsNumber, IsOptional, IsString } from 'class-validator';
 import { DriverStatus, MaintenanceFeeStatus, TripStatus, UserType, WalletTxType } from '@prisma/client';
 import { Auth } from '../auth/auth.decorator';
 import { PrismaService } from '../prisma/prisma.service';
@@ -74,6 +75,18 @@ class AdminCancelTripDto {
 
 class AssignDriverDto {
   @IsString() @IsNotEmpty() driverId: string;
+}
+
+class CreateBroadcastDto {
+  @IsString() @IsNotEmpty() title: string;
+  @IsString() @IsNotEmpty() body: string;
+  @IsIn(['ALL', 'CUSTOMERS', 'DRIVERS', 'ACTIVE_DRIVERS'])
+  target: 'ALL' | 'CUSTOMERS' | 'DRIVERS' | 'ACTIVE_DRIVERS';
+  @IsOptional()
+  @IsIn(['PROMO', 'UPDATE', 'SYSTEM', 'GENERAL'])
+  category?: 'PROMO' | 'UPDATE' | 'SYSTEM' | 'GENERAL';
+  @IsOptional() @IsBoolean() showPopup?: boolean;
+  @IsOptional() @IsString() actionUrl?: string;
 }
 
 @Auth('ADMIN')
@@ -815,6 +828,27 @@ export class AdminController {
         ...(dto.isActive !== undefined ? { isActive: dto.isActive } : {}),
       },
     });
+  }
+
+  // ==================== THÔNG BÁO HÀNG LOẠT (BROADCAST) ====================
+  @Get('broadcasts/audience-stats')
+  getBroadcastAudienceStats() {
+    return this.notifications.getAudienceStats();
+  }
+
+  @Get('broadcasts')
+  listBroadcasts() {
+    return this.notifications.listBroadcasts(50);
+  }
+
+  @Post('broadcasts')
+  createBroadcast(@Req() req: any, @Body() dto: CreateBroadcastDto) {
+    return this.notifications.sendBroadcast(req.user.sub, dto);
+  }
+
+  @Delete('broadcasts/:id')
+  deleteBroadcast(@Req() req: any, @Param('id') id: string) {
+    return this.notifications.deleteBroadcast(req.user.sub, id);
   }
 
   private addOneMonth(date: Date): Date {

@@ -3,6 +3,7 @@ import {
   ActivityIndicator,
   Alert,
   Image,
+  Linking,
   StyleSheet,
   Text,
   TextInput,
@@ -617,18 +618,37 @@ export function MaintenanceFeeView({
   );
 }
 
+const BROADCAST_BADGE: Record<string, { label: string; bg: string; fg: string }> = {
+  PROMO: { label: '🎁 Thưởng / Ưu đãi', bg: '#FFE4E6', fg: '#BE123C' },
+  UPDATE: { label: '🚀 Cập nhật', bg: '#E0E7FF', fg: '#3730A3' },
+  SYSTEM: { label: '📢 Vận hành', bg: '#FEF3C7', fg: '#92400E' },
+  GENERAL: { label: '🔔 Thông báo', bg: '#F1F5F9', fg: '#334155' },
+};
+
 export function DriverHistoryAndNotifsView({
   trips,
   notifications,
+  onMarkRead,
+  onMarkAllRead,
 }: {
   trips: any[];
   notifications: any[];
+  onMarkRead?: (id: string) => void;
+  onMarkAllRead?: () => void;
 }) {
   const [subTab, setSubTab] = useState<'trips' | 'notifs'>('trips');
+  const unreadNotifs = notifications.filter((n) => !n.readAt).length;
 
   return (
     <View style={styles.list}>
-      <Text style={styles.pageTitle}>Hoạt động & Thông báo</Text>
+      <View style={styles.rowBetween}>
+        <Text style={styles.pageTitle}>Hoạt động & Thông báo</Text>
+        {subTab === 'notifs' && unreadNotifs > 0 && onMarkAllRead && (
+          <TouchableOpacity style={styles.markReadChip} onPress={onMarkAllRead}>
+            <Text style={styles.markReadTxt}>Đọc tất cả</Text>
+          </TouchableOpacity>
+        )}
+      </View>
       <View style={styles.segment}>
         <TouchableOpacity
           style={[styles.segBtn, subTab === 'trips' && styles.segActive]}
@@ -643,7 +663,7 @@ export function DriverHistoryAndNotifsView({
           onPress={() => setSubTab('notifs')}
         >
           <Text style={[styles.segTxt, subTab === 'notifs' && styles.segTxtActive]}>
-            Thông báo ({notifications.length})
+            Thông báo ({notifications.length}{unreadNotifs > 0 ? ` · ${unreadNotifs} mới` : ''})
           </Text>
         </TouchableOpacity>
       </View>
@@ -692,13 +712,44 @@ export function DriverHistoryAndNotifsView({
       ) : (
         <View style={{ gap: 10 }}>
           {notifications.length === 0 && <Text style={styles.sub}>Chưa có thông báo nào.</Text>}
-          {notifications.slice(0, 25).map((n) => (
-            <View key={n.id} style={styles.card}>
-              <Text style={styles.bold}>{n.title}</Text>
-              <Text style={styles.sub}>{n.body}</Text>
-              <Text style={styles.tiny}>{new Date(n.sentAt).toLocaleString('vi-VN')}</Text>
-            </View>
-          ))}
+          {notifications.slice(0, 30).map((n) => {
+            const badge = n?.data?.kind === 'BROADCAST' ? BROADCAST_BADGE[n.data.category || 'GENERAL'] : null;
+            const actionUrl = n?.data?.actionUrl as string | undefined;
+            return (
+              <TouchableOpacity
+                key={n.id}
+                activeOpacity={0.85}
+                onPress={() => {
+                  if (!n.readAt) onMarkRead?.(n.id);
+                }}
+                style={[styles.card, !n.readAt && styles.unreadCard]}
+              >
+                {badge && (
+                  <View style={{ alignSelf: 'flex-start', backgroundColor: badge.bg, paddingHorizontal: 8, paddingVertical: 3, borderRadius: 8 }}>
+                    <Text style={{ fontSize: 10.5, fontWeight: '800', color: badge.fg }}>{badge.label}</Text>
+                  </View>
+                )}
+                <View style={styles.rowBetween}>
+                  <Text style={[styles.bold, { flex: 1 }]}>{n.title}</Text>
+                  {!n.readAt && <View style={styles.unreadDot} />}
+                </View>
+                <Text style={styles.sub}>{n.body}</Text>
+                {actionUrl ? (
+                  <TouchableOpacity
+                    style={styles.actionLinkBtn}
+                    onPress={() => {
+                      if (!n.readAt) onMarkRead?.(n.id);
+                      Linking.openURL(actionUrl).catch(() => undefined);
+                    }}
+                  >
+                    <Ionicons name="open-outline" size={14} color="#FFFFFF" />
+                    <Text style={styles.actionLinkTxt}>Xem chi tiết</Text>
+                  </TouchableOpacity>
+                ) : null}
+                <Text style={styles.tiny}>{new Date(n.sentAt).toLocaleString('vi-VN')}</Text>
+              </TouchableOpacity>
+            );
+          })}
         </View>
       )}
     </View>
@@ -755,4 +806,19 @@ const styles = StyleSheet.create({
   segActive: { backgroundColor: '#FFFFFF', ...SHADOW.card },
   segTxt: { fontSize: 13, fontWeight: '700', color: COLORS.textMuted },
   segTxtActive: { color: COLORS.primary },
+  unreadCard: { borderLeftWidth: 4, borderLeftColor: COLORS.primary },
+  unreadDot: { width: 9, height: 9, borderRadius: 5, backgroundColor: COLORS.primary },
+  markReadChip: { backgroundColor: COLORS.primarySoft, paddingHorizontal: 10, paddingVertical: 6, borderRadius: 10 },
+  markReadTxt: { color: COLORS.primary, fontWeight: '700', fontSize: 12 },
+  actionLinkBtn: {
+    alignSelf: 'flex-start',
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+    backgroundColor: COLORS.primary,
+    paddingHorizontal: 12,
+    paddingVertical: 7,
+    borderRadius: 10,
+  },
+  actionLinkTxt: { color: '#FFFFFF', fontWeight: '800', fontSize: 12 },
 });
